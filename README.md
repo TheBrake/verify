@@ -1,4 +1,4 @@
-# Verify
+# Verify - V 1.0
 
 Herramienta CLI en Rust que actúa como **Git hook local de pre-push**. Se encarga de
 interceptar `git push`, lee únicamente el diff que está a punto de salir de
