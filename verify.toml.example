@@ -1,0 +1,27 @@
+# Verify — local pre-push secret auditor
+# Copy to the repo root as verify.toml (or run: verify init)
+
+[verify]
+# "any" blocks every finding. "high" only blocks critical/high severity.
+fail_on = "any"
+redact = true
+max_file_bytes = 1048576
+entropy_enabled = true
+entropy_min_length = 24
+entropy_threshold = 4.5
+block_env_files = true
+
+[paths]
+exclude = ["**/tests/fixtures/**", "**/*.md"]
+
+# Custom rules use * and ? wildcards. Optional (?i) prefix = ignore case.
+# [[rules]]
+# id = "prod-postgres"
+# description = "No production PostgreSQL connection strings"
+# pattern = '(?i)*postgres*://*prod*'
+# severity = "critical"
+
+# [[allow]]
+# rule = "generic-api-key"
+# path = "testdata/sample.env"
+# contains = "EXAMPLE_NOT_A_REAL_KEY"
