@@ -1,9 +1,9 @@
 # Verify
 
-Herramienta CLI en Rust que actúa como **Git hook local de pre-push**.
-Intercepta `git push`, lee únicamente el diff que está a punto de salir de
+Herramienta CLI en Rust que actúa como **Git hook local de pre-push**. Se encarga de
+interceptar `git push`, lee únicamente el diff que está a punto de salir de
 la máquina y bloquea la subida si detecta credenciales, ficheros `.env` o
-llaves de API.
+llaves de API entre otras cosas que desees configurarlo 
 
 Diseñada para ser **rápida, offline y memory-safe**. No escanea el disco,
 no llama a APIs externas y no verifica secretos en vivo (eso es trabajo
@@ -35,9 +35,9 @@ prefiltro Aho-Corasick  →  regex precisas  →  entropía de Shannon
 
 ```bash
 cargo install --path .
-cd tu-repo
-verify install          # escribe .git/hooks/pre-push
-verify init             # opcional: verify.toml en la raíz
+cd a tu repositorio
+verify install
+verify init       
 ```
 
 ## Uso
@@ -82,7 +82,7 @@ contains = "EXAMPLE_NOT_A_REAL_KEY"
 
 También se puede silenciar una línea concreta con `// verify:allow`.
 
-## Qué detecta de serie
+## Qué detecta de serie en la v1
 
 AWS keys, tokens de GitHub/GitLab/Slack/Stripe/OpenAI/Google, JWTs,
 PEM private keys, connection strings de Postgres/MySQL/Mongo/Redis,
@@ -94,3 +94,5 @@ nuevos, y tokens de alta entropía desconocidos.
 Documentado en la conversación que acompaña al repo: clap, serde+toml,
 regex + aho-corasick, Shannon entropy, subprocess de `git` (no libgit2),
 binario estático, LTO, cero red.
+
+## Por TheBrakesito (TheBrake)
