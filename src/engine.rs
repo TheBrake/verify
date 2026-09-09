@@ -1,6 +1,6 @@
-use crate::config::{self, Config};
+use crate::config::Config;
 use crate::diff::AddedLine;
-use crate::rules::{self, CompiledRule, Kind, Severity};
+use crate::rules::{self, CompiledRule, Severity};
 use std::path::PathBuf;
 
 pub struct Engine {
@@ -70,45 +70,29 @@ impl Engine {
             }
 
             for rule in &self.rules {
-                let matched = match &rule.kind {
-                    Kind::Builtin(f) => f(&line.text),
-                    Kind::Regex {
-                        regex,
-                        secret_group,
-                        keywords,
-                        path_matcher,
-                        entropy,
-                    } => match_custom_rule(
+                let matches = rules::match_line(rule, &line.text, &line.path);
+                for matched in matches {
+                    if matches!(
+                        rule.id.as_str(),
+                        "generic-api-key" | "password-assign" | "generic-db-url"
+                    ) && (looks_like_placeholder(&matched) || looks_like_placeholder(&line.text))
+                    {
+                        continue;
+                    }
+
+                    let f = self.make_finding(
+                        &rule.id,
+                        &rule.description,
+                        rule.severity,
                         line,
-                        regex,
-                        *secret_group,
-                        keywords,
-                        path_matcher.as_ref(),
-                        *entropy,
-                    ),
-                };
-                let Some(matched) = matched else { continue };
-
-                if matches!(
-                    rule.id.as_str(),
-                    "generic-api-key" | "password-assign" | "generic-db-url"
-                ) && (looks_like_placeholder(&matched) || looks_like_placeholder(&line.text))
-                {
-                    continue;
-                }
-
-                let f = self.make_finding(
-                    &rule.id,
-                    &rule.description,
-                    rule.severity,
-                    line,
-                    &matched,
-                );
-                if self.is_allowed(&f, line) {
-                    continue;
-                }
-                if seen.insert(format!("{}:{}:{}", f.path, f.line_no, f.rule_id)) {
-                    findings.push(f);
+                        &matched,
+                    );
+                    if self.is_allowed(&f, line) {
+                        continue;
+                    }
+                    if seen.insert(format!("{}:{}:{}:{}", f.path, f.line_no, f.rule_id, f.snippet)) {
+                        findings.push(f);
+                    }
                 }
             }
 
@@ -169,47 +153,6 @@ impl Engine {
             )
         })
     }
-}
-
-fn match_custom_rule(
-    line: &AddedLine,
-    regex: &regex::Regex,
-    secret_group: Option<usize>,
-    keywords: &[String],
-    path_matcher: Option<&globset::GlobMatcher>,
-    entropy: Option<f64>,
-) -> Option<String> {
-    if !keywords.is_empty() {
-        let lower = line.text.to_ascii_lowercase();
-        let hit = keywords.iter().any(|k| {
-            if k.chars().any(|c| c.is_ascii_uppercase()) {
-                line.text.contains(k)
-            } else {
-                lower.contains(&k.to_ascii_lowercase())
-            }
-        });
-        if !hit {
-            return None;
-        }
-    }
-    if let Some(matcher) = path_matcher {
-        let path = config::normalize_scan_path(&line.path);
-        if !matcher.is_match(path.as_str()) {
-            return None;
-        }
-    }
-    let caps = regex.captures(&line.text)?;
-    let matched = if let Some(g) = secret_group {
-        caps.get(g)?.as_str().to_string()
-    } else {
-        caps.get(0)?.as_str().to_string()
-    };
-    if let Some(min_ent) = entropy {
-        if shannon_entropy(&matched) < min_ent {
-            return None;
-        }
-    }
-    Some(matched)
 }
 
 pub fn read_files_as_added(paths: &[PathBuf]) -> Result<Vec<AddedLine>, String> {
