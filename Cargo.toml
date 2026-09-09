@@ -1,3 +1,4 @@
+
 [package]
 name = "verify"
 version = "0.1.0"
@@ -6,13 +7,24 @@ rust-version = "1.75"
 description = "Ultra-fast local Git pre-push hook that blocks leaked secrets."
 license = "MIT"
 
+# Package name is generic; rename before crates.io. The hook uses current_exe(),
+# so a local `verify` binary name is independent of the crate name.
+
+[[bin]]
+name = "verify"
+path = "src/main.rs"
+
 [dependencies]
-globset = "=0.4.14"
-regex = "=1.10.6"
-serde = { version = "=1.0.197", features = ["derive"] }
-toml = "=0.8.12"
-# Pin so cargo does not pull edition2024-only transitive crates.
-indexmap = { version = "=2.2.6", optional = false }
+# Semver ranges, not frozen `=` — except where a later patch in the same
+# minor requires edition2024 (rustc > 1.75). Reproducible releases:
+# commit Cargo.lock and build with `cargo test --locked`.
+globset = "=0.4.14"          # 0.4.20+ needs edition2024
+regex = "~1.10.6"            # 1.10.x patches only
+serde = { version = "~1.0.197", features = ["derive"] }
+toml = "~0.8.12"             # 0.8.x; lockfile freezes the exact rev
+# Not referenced in src/. Caps toml_edit's transitive below 2.3 so
+# `cargo update` cannot pull indexmap 2.7+ (edition2024).
+indexmap = "~2.2.6"
 
 [profile.release]
 lto = true
