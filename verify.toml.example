@@ -1,5 +1,6 @@
 # Verify — local pre-push secret auditor
 # Copy to the repo root as verify.toml (or run: verify init)
+# Dotfile form `.verify.toml` is also discovered automatically.
 
 [verify]
 # "any" blocks every finding. "high" only blocks critical/high severity.
@@ -12,16 +13,20 @@ entropy_threshold = 4.5
 block_env_files = true
 
 [paths]
+# false (default): append to built-in excludes. true: replace them.
+replace_excludes = false
 exclude = ["**/tests/fixtures/**", "**/*.md"]
 
-# Custom rules use * and ? wildcards. Optional (?i) prefix = ignore case.
+# Custom rules are real regexes, compiled at load time.
 # [[rules]]
 # id = "prod-postgres"
 # description = "No production PostgreSQL connection strings"
-# pattern = '(?i)*postgres*://*prod*'
+# pattern = '(?i)postgres(?:ql)?://[^\s]+:[^\s]+@[^\s]*(?:prod|production)'
 # severity = "critical"
+# keywords = ["postgres"]
 
 # [[allow]]
 # rule = "generic-api-key"
-# path = "testdata/sample.env"
+# paths = ["testdata/sample.env"]
 # contains = "EXAMPLE_NOT_A_REAL_KEY"
+# condition = "and"

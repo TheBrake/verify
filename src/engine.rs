@@ -46,12 +46,7 @@ impl Engine {
             if line.path.is_empty() {
                 continue;
             }
-            if self
-                .cfg
-                .exclude
-                .iter()
-                .any(|p| config::glob_match(p, &line.path))
-            {
+            if self.cfg.is_excluded(&line.path) {
                 continue;
             }
             if line.text.len() > self.cfg.max_file_bytes {
@@ -77,9 +72,20 @@ impl Engine {
             for rule in &self.rules {
                 let matched = match &rule.kind {
                     Kind::Builtin(f) => f(&line.text),
-                    Kind::Wildcard { ignore_case, pat } => {
-                        rules::wildcard_find(&line.text, pat, *ignore_case)
-                    }
+                    Kind::Regex {
+                        regex,
+                        secret_group,
+                        keywords,
+                        path_matcher,
+                        entropy,
+                    } => match_custom_rule(
+                        line,
+                        regex,
+                        *secret_group,
+                        keywords,
+                        path_matcher.as_ref(),
+                        *entropy,
+                    ),
                 };
                 let Some(matched) = matched else { continue };
 
@@ -153,34 +159,57 @@ impl Engine {
     }
 
     fn is_allowed(&self, finding: &Finding, line: &AddedLine) -> bool {
-        for a in &self.cfg.allow {
-            if let Some(rule) = &a.rule {
-                if rule != &finding.rule_id {
-                    continue;
-                }
-            }
-            if let Some(path) = &a.path {
-                if path != &finding.path && path != &line.path {
-                    continue;
-                }
-            }
-            if let Some(fp) = &a.fingerprint {
-                if fp != &finding.fingerprint {
-                    continue;
-                }
-            }
-            if let Some(contains) = &a.contains {
-                if !line.text.contains(contains) && !finding.snippet.contains(contains) {
-                    continue;
-                }
-            }
-            if a.rule.is_some() || a.path.is_some() || a.fingerprint.is_some() || a.contains.is_some()
-            {
-                return true;
-            }
-        }
-        false
+        self.cfg.allow.iter().any(|a| {
+            a.matches(
+                &finding.rule_id,
+                &finding.path,
+                &finding.snippet,
+                &line.text,
+                &finding.fingerprint,
+            )
+        })
     }
+}
+
+fn match_custom_rule(
+    line: &AddedLine,
+    regex: &regex::Regex,
+    secret_group: Option<usize>,
+    keywords: &[String],
+    path_matcher: Option<&globset::GlobMatcher>,
+    entropy: Option<f64>,
+) -> Option<String> {
+    if !keywords.is_empty() {
+        let lower = line.text.to_ascii_lowercase();
+        let hit = keywords.iter().any(|k| {
+            if k.chars().any(|c| c.is_ascii_uppercase()) {
+                line.text.contains(k)
+            } else {
+                lower.contains(&k.to_ascii_lowercase())
+            }
+        });
+        if !hit {
+            return None;
+        }
+    }
+    if let Some(matcher) = path_matcher {
+        let path = config::normalize_scan_path(&line.path);
+        if !matcher.is_match(path.as_str()) {
+            return None;
+        }
+    }
+    let caps = regex.captures(&line.text)?;
+    let matched = if let Some(g) = secret_group {
+        caps.get(g)?.as_str().to_string()
+    } else {
+        caps.get(0)?.as_str().to_string()
+    };
+    if let Some(min_ent) = entropy {
+        if shannon_entropy(&matched) < min_ent {
+            return None;
+        }
+    }
+    Some(matched)
 }
 
 pub fn read_files_as_added(paths: &[PathBuf]) -> Result<Vec<AddedLine>, String> {
