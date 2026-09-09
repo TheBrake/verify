@@ -144,7 +144,7 @@ fn hook_run(
         if update.is_delete() {
             continue;
         }
-        all_added.extend(git::added_lines_for_update(update)?);
+        all_added.extend(git::added_lines_for_update(update, remote.as_deref())?);
     }
 
     let engine = engine::Engine::new(&cfg)?;
