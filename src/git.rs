@@ -93,7 +93,7 @@ pub fn added_lines_unpushed() -> Result<Vec<AddedLine>, String> {
 
 pub fn added_lines_vs_head() -> Result<Vec<AddedLine>, String> {
     let raw = git_stdout(&["diff", "--unified=0", "--diff-filter=ACMR", "HEAD"])?;
-    Ok(diff::parse_unified_diff(&raw))
+    diff::parse_unified_diff(&raw)
 }
 
 fn merge_base_or_empty(local_sha: &str) -> String {
@@ -123,7 +123,7 @@ fn diff_range(from: &str, to: &str) -> Result<Vec<AddedLine>, String> {
         from,
         to,
     ])?;
-    Ok(diff::parse_unified_diff(&raw))
+    diff::parse_unified_diff(&raw)
 }
 
 pub fn git_stdout(args: &[&str]) -> Result<String, String> {
