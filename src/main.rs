@@ -180,7 +180,7 @@ fn scan_cmd(
             .map_err(|e| e.to_string())?;
         crate::diff::parse_unified_diff(&buf)
     } else if !paths.is_empty() {
-        engine::read_files_as_added(&paths)?
+        engine::read_files_as_added(&paths, cfg.max_file_bytes)?
     } else if git::repo_root().is_some() {
         git::added_lines_unpushed().or_else(|_| git::added_lines_vs_head())?
     } else {

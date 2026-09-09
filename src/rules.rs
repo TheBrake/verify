@@ -154,7 +154,7 @@ fn keywords_hit(line: &str, keywords: &[String]) -> bool {
     })
 }
 
-fn shannon_entropy(s: &str) -> f64 {
+pub fn shannon_entropy(s: &str) -> f64 {
     if s.is_empty() {
         return 0.0;
     }

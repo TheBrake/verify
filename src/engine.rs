@@ -1,7 +1,11 @@
 use crate::config::Config;
 use crate::diff::AddedLine;
 use crate::rules::{self, CompiledRule, Severity};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+
+/// Stop walking the rest of the diff once this many blocking findings exist.
+const MAX_BLOCKING_FINDINGS: usize = 64;
 
 pub struct Engine {
     rules: Vec<CompiledRule>,
@@ -39,43 +43,58 @@ impl Engine {
     }
 
     pub fn scan_added_lines(&self, lines: &[AddedLine]) -> Vec<Finding> {
+        let oversized = oversized_paths(lines, self.cfg.max_file_bytes);
         let mut findings = Vec::new();
-        let mut seen = std::collections::HashSet::<String>::new();
+        let mut seen = HashSet::<String>::new();
+        let mut blocking = 0usize;
 
         for line in lines {
+            if blocking >= MAX_BLOCKING_FINDINGS {
+                break;
+            }
             if line.path.is_empty() {
                 continue;
             }
             if self.cfg.is_excluded(&line.path) {
                 continue;
             }
-            if line.text.len() > self.cfg.max_file_bytes {
-                continue;
-            }
-            if is_allow_comment(&line.text) {
+            if oversized.contains(&line.path) {
                 continue;
             }
 
+            let allow = line_allow(&line.text);
+
             if self.cfg.block_env_files && line.is_new_file && is_env_file(&line.path) {
-                let f = self.make_finding(
-                    "env-file",
-                    "Newly added environment file (likely contains secrets)",
-                    Severity::Critical,
-                    line,
-                    &line.path,
-                );
-                if !self.is_allowed(&f, line) && seen.insert(f.fingerprint.clone()) {
-                    findings.push(f);
+                if !allow.skips("env-file") {
+                    let f = self.make_finding(
+                        "env-file",
+                        "Newly added environment file (likely contains secrets)",
+                        Severity::Critical,
+                        line,
+                        &line.path,
+                    );
+                    if !self.is_allowed(&f, line) && seen.insert(f.fingerprint.clone()) {
+                        if f.blocks(&self.cfg) {
+                            blocking += 1;
+                        }
+                        findings.push(f);
+                    }
                 }
             }
 
+            let before = findings.len();
             for rule in &self.rules {
-                let matches = rules::match_line(rule, &line.text, &line.path);
-                for matched in matches {
+                if allow.skips(&rule.id) {
+                    continue;
+                }
+                for matched in rules::match_line(rule, &line.text, &line.path) {
+                    if is_doc_secret(&matched) {
+                        continue;
+                    }
                     if matches!(
                         rule.id.as_str(),
                         "generic-api-key" | "password-assign" | "generic-db-url"
-                    ) && (looks_like_placeholder(&matched) || looks_like_placeholder(&line.text))
+                    ) && looks_like_placeholder(&matched)
                     {
                         continue;
                     }
@@ -90,31 +109,40 @@ impl Engine {
                     if self.is_allowed(&f, line) {
                         continue;
                     }
-                    if seen.insert(format!("{}:{}:{}:{}", f.path, f.line_no, f.rule_id, f.snippet)) {
+                    if seen.insert(f.fingerprint.clone()) {
+                        if f.blocks(&self.cfg) {
+                            blocking += 1;
+                        }
                         findings.push(f);
                     }
                 }
             }
+            let line_had_rule = findings.len() > before;
 
-            if self.cfg.entropy_enabled {
-                if let Some(token) = high_entropy_token(
+            if self.cfg.entropy_enabled && !line_had_rule && !allow.skips("high-entropy") {
+                for token in high_entropy_tokens(
                     &line.text,
                     self.cfg.entropy_min_length,
                     self.cfg.entropy_threshold,
                 ) {
-                    if !looks_like_placeholder(&token) {
-                        let f = self.make_finding(
-                            "high-entropy",
-                            "High-entropy token (possible unknown secret)",
-                            Severity::Medium,
-                            line,
-                            &token,
-                        );
-                        if !self.is_allowed(&f, line)
-                            && seen.insert(format!("{}:{}:high-entropy", f.path, f.line_no))
-                        {
-                            findings.push(f);
+                    if is_doc_secret(&token) || looks_like_placeholder(&token) {
+                        continue;
+                    }
+                    let f = self.make_finding(
+                        "high-entropy",
+                        "High-entropy token (possible unknown secret)",
+                        Severity::Medium,
+                        line,
+                        &token,
+                    );
+                    if self.is_allowed(&f, line) {
+                        continue;
+                    }
+                    if seen.insert(f.fingerprint.clone()) {
+                        if f.blocks(&self.cfg) {
+                            blocking += 1;
                         }
+                        findings.push(f);
                     }
                 }
             }
@@ -131,14 +159,15 @@ impl Engine {
         line: &AddedLine,
         matched: &str,
     ) -> Finding {
+        let snippet = normalize_secret(matched);
         Finding {
-            fingerprint: fingerprint(rule_id, matched),
+            fingerprint: fingerprint(rule_id, &snippet),
             rule_id: rule_id.to_string(),
             description: description.to_string(),
             severity,
             path: line.path.clone(),
             line_no: line.line_no,
-            snippet: matched.to_string(),
+            snippet,
         }
     }
 
@@ -155,43 +184,145 @@ impl Engine {
     }
 }
 
-pub fn read_files_as_added(paths: &[PathBuf]) -> Result<Vec<AddedLine>, String> {
+fn oversized_paths(lines: &[AddedLine], max_file_bytes: usize) -> HashSet<String> {
+    let mut sizes: HashMap<&str, usize> = HashMap::new();
+    for line in lines {
+        if line.path.is_empty() {
+            continue;
+        }
+        *sizes.entry(line.path.as_str()).or_insert(0) += line.text.len().saturating_add(1);
+    }
+    sizes
+        .into_iter()
+        .filter(|(_, n)| *n > max_file_bytes)
+        .map(|(p, _)| p.to_string())
+        .collect()
+}
+
+/// Read paths as if they were newly added files.
+/// I/O errors surface. Files larger than `max_file_bytes` are omitted (no findings).
+pub fn read_files_as_added(
+    paths: &[PathBuf],
+    max_file_bytes: usize,
+) -> Result<Vec<AddedLine>, String> {
     let mut out = Vec::new();
     for path in paths {
-        let text = match std::fs::read_to_string(path) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
+        let meta = std::fs::metadata(path).map_err(|e| {
+            format!("failed to read {}: {e}", path.display())
+        })?;
+        if meta.len() as usize > max_file_bytes {
+            continue;
+        }
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         let display = path.display().to_string();
+        let env = is_env_file(&display);
         for (i, line) in text.lines().enumerate() {
             out.push(AddedLine {
                 path: display.clone(),
                 line_no: i + 1,
                 text: line.to_string(),
-                is_new_file: false,
+                // File scan is "the whole file is leaving the machine".
+                // Env-file policy must match pre-push (is_new_file from the diff).
+                is_new_file: env,
             });
         }
     }
     Ok(out)
 }
 
-fn is_env_file(path: &str) -> bool {
-    let name = path.rsplit('/').next().unwrap_or(path);
-    if name.eq_ignore_ascii_case(".env.example")
-        || name.eq_ignore_ascii_case(".env.sample")
-        || name.eq_ignore_ascii_case(".env.template")
-        || name.eq_ignore_ascii_case(".env.test")
-    {
+pub fn is_env_file(path: &str) -> bool {
+    let raw = path.replace('\\', "/");
+    let name = raw.rsplit('/').next().unwrap_or(raw.as_str());
+    let name = name.to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        ".env.example" | ".env.sample" | ".env.template" | ".env.test"
+    ) {
         return false;
     }
     name == ".env" || name.starts_with(".env.")
 }
 
-fn is_allow_comment(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    lower.contains("verify:allow")
-        || lower.contains("verify-ignore")
-        || lower.contains("verify:ignore")
+#[derive(Debug, PartialEq, Eq)]
+enum LineAllow {
+    None,
+    All,
+    Rule(String),
+}
+
+impl LineAllow {
+    fn skips(&self, rule_id: &str) -> bool {
+        match self {
+            Self::None => false,
+            Self::All => true,
+            Self::Rule(id) => id.eq_ignore_ascii_case(rule_id),
+        }
+    }
+}
+
+/// Only a real trailing comment can silence the line.
+/// `verify:allow` / `verify:ignore` / `verify-ignore`; optional `:rule_id`.
+fn line_allow(line: &str) -> LineAllow {
+    let Some(body) = trailing_comment(line) else {
+        return LineAllow::None;
+    };
+    let lower = body.to_ascii_lowercase();
+    for marker in ["verify:allow", "verify:ignore", "verify-ignore"] {
+        if let Some(idx) = lower.find(marker) {
+            let after = lower[idx + marker.len()..].trim_start();
+            if let Some(rest) = after.strip_prefix(':') {
+                let id: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+                    .collect();
+                if !id.is_empty() {
+                    return LineAllow::Rule(id);
+                }
+            }
+            return LineAllow::All;
+        }
+    }
+    LineAllow::None
+}
+
+fn trailing_comment(line: &str) -> Option<&str> {
+    let bytes = line.as_bytes();
+    let mut i = 0;
+    let mut in_single = false;
+    let mut in_double = false;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'\\' && (in_single || in_double) && i + 1 < bytes.len() {
+            i += 2;
+            continue;
+        }
+        if c == b'"' && !in_single {
+            in_double = !in_double;
+            i += 1;
+            continue;
+        }
+        if c == b'\'' && !in_double {
+            in_single = !in_single;
+            i += 1;
+            continue;
+        }
+        if in_single || in_double {
+            i += 1;
+            continue;
+        }
+        if c == b'#' {
+            return Some(&line[i + 1..]);
+        }
+        if c == b'/' && i + 1 < bytes.len() && (bytes[i + 1] == b'/' || bytes[i + 1] == b'*') {
+            return Some(&line[i + 2..]);
+        }
+        if c == b'-' && i + 1 < bytes.len() && bytes[i + 1] == b'-' {
+            return Some(&line[i + 2..]);
+        }
+        i += 1;
+    }
+    None
 }
 
 fn looks_like_placeholder(s: &str) -> bool {
@@ -200,7 +331,6 @@ fn looks_like_placeholder(s: &str) -> bool {
         "your_",
         "changeme",
         "placeholder",
-        "example",
         "xxx",
         "todo",
         "insert_",
@@ -217,40 +347,50 @@ fn looks_like_placeholder(s: &str) -> bool {
     MARKERS.iter().any(|m| l.contains(m))
 }
 
+/// Exact documentation / fixture secrets. Not a substring filter.
+fn is_doc_secret(secret: &str) -> bool {
+    const DOCS: &[&str] = &[
+        "AKIAIOSFODNN7EXAMPLE",
+        "ASIAIOSFODNN7EXAMPLE",
+        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+    ];
+    let norm = normalize_secret(secret);
+    DOCS.iter().any(|d| d.eq_ignore_ascii_case(&norm))
+}
+
+pub fn normalize_secret(secret: &str) -> String {
+    secret
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim()
+        .to_string()
+}
+
+/// 128-bit FNV-1a of rule_id || 0 || normalized secret. Path is not mixed in:
+/// an Allow.fingerprint silences that secret everywhere.
 pub fn fingerprint(rule_id: &str, secret: &str) -> String {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in rule_id
+    let secret = normalize_secret(secret);
+    let mut h0: u64 = 0xcbf29ce484222325;
+    let mut h1: u64 = 0x6c62272e07bb0142;
+    for (i, b) in rule_id
         .bytes()
         .chain(std::iter::once(0))
-        .chain(secret.trim().bytes())
+        .chain(secret.bytes())
+        .enumerate()
     {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    format!("vf_{h:016x}")
-}
-
-pub fn shannon_entropy(s: &str) -> f64 {
-    if s.is_empty() {
-        return 0.0;
-    }
-    let mut counts = [0u32; 256];
-    for b in s.bytes() {
-        counts[b as usize] += 1;
-    }
-    let len = s.len() as f64;
-    let mut ent = 0.0;
-    for c in counts {
-        if c > 0 {
-            let p = c as f64 / len;
-            ent -= p * p.log2();
+        if i % 2 == 0 {
+            h0 ^= b as u64;
+            h0 = h0.wrapping_mul(0x100000001b3);
+        } else {
+            h1 ^= b as u64;
+            h1 = h1.wrapping_mul(0x100000001b3);
         }
     }
-    ent
+    format!("vf_{h0:016x}{h1:016x}")
 }
 
-fn high_entropy_token(line: &str, min_len: usize, threshold: f64) -> Option<String> {
-    let mut best: Option<(f64, String)> = None;
+fn high_entropy_tokens(line: &str, min_len: usize, threshold: f64) -> Vec<String> {
+    let mut out = Vec::new();
     for token in tokenize(line) {
         if token.len() < min_len {
             continue;
@@ -261,15 +401,14 @@ fn high_entropy_token(line: &str, min_len: usize, threshold: f64) -> Option<Stri
         if !looks_secretish(token) {
             continue;
         }
-        let e = shannon_entropy(token);
-        if e >= threshold {
-            match &best {
-                Some((prev, _)) if *prev >= e => {}
-                _ => best = Some((e, token.to_string())),
+        if rules::shannon_entropy(token) >= threshold {
+            let n = normalize_secret(token);
+            if !out.iter().any(|t| t == &n) {
+                out.push(n);
             }
         }
     }
-    best.map(|(_, t)| t)
+    out
 }
 
 fn tokenize(line: &str) -> impl Iterator<Item = &str> {
@@ -297,22 +436,39 @@ fn looks_secretish(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::Config;
+    use crate::config::{Config, FailOn};
 
-    fn scan_line(text: &str) -> Vec<Finding> {
+    fn scan_on(path: &str, text: &str, new_file: bool) -> Vec<Finding> {
         let engine = Engine::new(&Config::default()).unwrap();
         engine.scan_added_lines(&[AddedLine {
-            path: "src/main.rs".into(),
+            path: path.into(),
             line_no: 1,
             text: text.into(),
-            is_new_file: false,
+            is_new_file: new_file,
         }])
+    }
+
+    fn scan_line(text: &str) -> Vec<Finding> {
+        scan_on("src/main.rs", text, false)
+    }
+
+    fn real_aws() -> &'static str {
+        "AKIAAAAAAAAAAAAAAAAA"
     }
 
     #[test]
     fn catches_aws_key() {
-        let f = scan_line(r#"const K: &str = "AKIAIOSFODNN7EXAMPLE";"#);
+        let f = scan_line(&format!(r#"const K: &str = "{}";"#, real_aws()));
         assert!(f.iter().any(|x| x.rule_id == "aws-access-key"), "{f:?}");
+    }
+
+    #[test]
+    fn doc_aws_example_is_denylisted() {
+        let f = scan_line(r#"const K: &str = "AKIAIOSFODNN7EXAMPLE";"#);
+        assert!(
+            f.iter().all(|x| x.rule_id != "aws-access-key"),
+            "docs key must not block: {f:?}"
+        );
     }
 
     #[test]
@@ -323,13 +479,158 @@ mod tests {
 
     #[test]
     fn allow_comment_skips() {
-        let f = scan_line(r#"password = "supersecret12" // verify:allow"#);
+        let f = scan_line(&format!(
+            r#"password = "supersecret12" // verify:allow"#
+        ));
         assert!(f.is_empty(), "{f:?}");
     }
 
     #[test]
+    fn allow_in_string_value_does_not_skip() {
+        let f = scan_line(r#"password = "supersecret12 verify:allow""#);
+        assert!(
+            f.iter().any(|x| x.rule_id == "password-assign"),
+            "payload must not silence the hook: {f:?}"
+        );
+    }
+
+    #[test]
+    fn allow_one_rule_only() {
+        let line = format!(
+            r#"{} // verify:allow:aws-access-key"#,
+            real_aws()
+        );
+        let f = scan_line(&line);
+        assert!(f.iter().all(|x| x.rule_id != "aws-access-key"), "{f:?}");
+    }
+
+    #[test]
     fn entropy_of_random_is_high() {
-        let e = shannon_entropy("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
+        let e = rules::shannon_entropy("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
         assert!(e > 4.0, "entropy={e}");
+    }
+
+    #[test]
+    fn entropy_not_emitted_when_rule_already_hit() {
+        let f = scan_line(&format!(r#"key = "{}";"#, real_aws()));
+        assert!(f.iter().any(|x| x.rule_id == "aws-access-key"), "{f:?}");
+        assert!(
+            f.iter().all(|x| x.rule_id != "high-entropy"),
+            "entropy is fallback, not a second opinion: {f:?}"
+        );
+    }
+
+    #[test]
+    fn entropy_returns_every_token_over_threshold() {
+        let a = "wJalrXUtnFEMI7MDENGbPxRfiC";
+        let b = "n4mQ8vL2pR9sT6wY3uA7cD1eH";
+        assert!(rules::shannon_entropy(a) >= 4.5, "{}", rules::shannon_entropy(a));
+        assert!(rules::shannon_entropy(b) >= 4.5, "{}", rules::shannon_entropy(b));
+        let f = scan_line(&format!("{a} {b}"));
+        let ent: Vec<_> = f.iter().filter(|x| x.rule_id == "high-entropy").collect();
+        assert!(ent.len() >= 2, "expected both tokens, got {f:?}");
+    }
+
+    #[test]
+    fn exclude_drops_path() {
+        let engine = Engine::new(&Config::default()).unwrap();
+        let f = engine.scan_added_lines(&[AddedLine {
+            path: "README.md".into(),
+            line_no: 1,
+            text: format!(r#"k = "{}""#, real_aws()),
+            is_new_file: false,
+        }]);
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    #[test]
+    fn block_env_file_on_file_scan_semantics() {
+        let engine = Engine::new(&Config::default()).unwrap();
+        let f = engine.scan_added_lines(&[AddedLine {
+            path: ".ENV.production".into(),
+            line_no: 1,
+            text: "FOO=1".into(),
+            is_new_file: true,
+        }]);
+        assert!(f.iter().any(|x| x.rule_id == "env-file"), "{f:?}");
+    }
+
+    #[test]
+    fn env_example_is_not_blocked() {
+        let f = scan_on(".env.example", "FOO=1", true);
+        assert!(f.iter().all(|x| x.rule_id != "env-file"), "{f:?}");
+    }
+
+    #[test]
+    fn max_file_bytes_applies_to_whole_path() {
+        let mut cfg = Config::default();
+        cfg.max_file_bytes = 32;
+        let engine = Engine::new(&cfg).unwrap();
+        let lines = vec![
+            AddedLine {
+                path: "src/big.rs".into(),
+                line_no: 1,
+                text: "a".repeat(20),
+                is_new_file: false,
+            },
+            AddedLine {
+                path: "src/big.rs".into(),
+                line_no: 2,
+                text: format!("k={}", real_aws()),
+                is_new_file: false,
+            },
+        ];
+        let f = engine.scan_added_lines(&lines);
+        assert!(f.is_empty(), "oversized path must be skipped: {f:?}");
+    }
+
+    #[test]
+    fn fail_on_high_ignores_medium() {
+        let mut cfg = Config::default();
+        cfg.fail_on = FailOn::High;
+        cfg.entropy_enabled = true;
+        let engine = Engine::new(&cfg).unwrap();
+        let token = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4";
+        let f = engine.scan_added_lines(&[AddedLine {
+            path: "src/main.rs".into(),
+            line_no: 1,
+            text: token.into(),
+            is_new_file: false,
+        }]);
+        assert!(f.iter().any(|x| x.rule_id == "high-entropy"), "{f:?}");
+        assert!(f.iter().all(|x| !x.blocks(&cfg)), "{f:?}");
+    }
+
+    #[test]
+    fn fingerprint_stable_across_trim_and_quotes() {
+        let a = fingerprint("aws-access-key", real_aws());
+        let b = fingerprint("aws-access-key", &format!("  \"{}\"  ", real_aws()));
+        assert_eq!(a, b);
+        assert!(a.starts_with("vf_"));
+        assert_eq!(a.len(), 3 + 32, "{a}");
+    }
+
+    #[test]
+    fn read_files_errors_on_missing_path() {
+        let err = read_files_as_added(
+            &[PathBuf::from("/no/such/verify-file-xyz")],
+            1024,
+        )
+        .unwrap_err();
+        assert!(err.contains("failed to read"), "{err}");
+    }
+
+    #[test]
+    fn read_files_marks_env_as_new() {
+        let dir = std::env::temp_dir().join(format!("verify-eng-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let envp = dir.join(".env");
+        std::fs::write(&envp, "FOO=1\n").unwrap();
+        let lines = read_files_as_added(&[envp.clone()], 1024).unwrap();
+        assert!(lines.iter().all(|l| l.is_new_file));
+        let engine = Engine::new(&Config::default()).unwrap();
+        let f = engine.scan_added_lines(&lines);
+        assert!(f.iter().any(|x| x.rule_id == "env-file"), "{f:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
