@@ -154,6 +154,8 @@ fn hook_run(
         show_secrets || !cfg.redact,
         remote.as_deref(),
         url.as_deref(),
+        &cfg,
+        report::Mode::Hook,
     );
     if findings.iter().any(|f| f.blocks(&cfg)) {
         Ok(ExitCode::from(1))
@@ -190,7 +192,7 @@ fn scan_cmd(
     };
 
     let findings = engine.scan_added_lines(&added);
-    report::print_verdict(&findings, show_secrets || !cfg.redact, None, None);
+    report::print_verdict(&findings, show_secrets || !cfg.redact, None, None, &cfg, report::Mode::Scan);
     if findings.iter().any(|f| f.blocks(&cfg)) {
         Ok(ExitCode::from(1))
     } else {
