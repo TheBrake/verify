@@ -1,32 +1,6 @@
 use crate::config::CustomRule;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Severity {
-    Low,
-    Medium,
-    High,
-    Critical,
-}
-
-impl Severity {
-    pub fn parse(s: &str) -> Self {
-        match s.to_ascii_lowercase().as_str() {
-            "critical" => Self::Critical,
-            "high" => Self::High,
-            "medium" => Self::Medium,
-            _ => Self::Low,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Critical => "critical",
-            Self::High => "high",
-            Self::Medium => "medium",
-            Self::Low => "low",
-        }
-    }
-}
+pub use crate::config::Severity;
 
 pub struct CompiledRule {
     pub id: String,
@@ -37,22 +11,29 @@ pub struct CompiledRule {
 
 pub enum Kind {
     Builtin(fn(&str) -> Option<String>),
-    Wildcard { ignore_case: bool, pat: String },
+    Regex {
+        regex: regex::Regex,
+        secret_group: Option<usize>,
+        keywords: Vec<String>,
+        path_matcher: Option<globset::GlobMatcher>,
+        entropy: Option<f64>,
+    },
 }
 
 pub fn compile_all(custom: &[CustomRule]) -> Result<Vec<CompiledRule>, String> {
     let mut out = builtin();
     for rule in custom {
-        let (ignore_case, pat) = if let Some(rest) = rule.pattern.strip_prefix("(?i)") {
-            (true, rest.to_string())
-        } else {
-            (false, rule.pattern.clone())
-        };
         out.push(CompiledRule {
             id: rule.id.clone(),
             description: rule.description.clone(),
-            severity: Severity::parse(&rule.severity),
-            kind: Kind::Wildcard { ignore_case, pat },
+            severity: rule.severity,
+            kind: Kind::Regex {
+                regex: rule.regex.clone(),
+                secret_group: rule.secret_group,
+                keywords: rule.keywords.clone(),
+                path_matcher: rule.path_matcher.clone(),
+                entropy: rule.entropy,
+            },
         });
     }
     Ok(out)
