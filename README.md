@@ -181,4 +181,4 @@ de crear el commit. No camina el árbol ni reescribe historia ya grabada.
 - Color ANSI solo si stderr es TTY. En CI el fingerprint se copia limpio.
 - MSRV **1.75**. Compilar y testear con `cargo test --locked`.
 
-## Por TheBrakesito (TheBrake)
+## Por TheBrakesito (TheBrake) 
