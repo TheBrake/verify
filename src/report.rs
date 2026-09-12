@@ -6,6 +6,7 @@ use std::io::IsTerminal;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
     Hook,
+    Commit,
     Scan,
 }
 
@@ -34,7 +35,22 @@ pub fn format_verdict(
     let mut out = String::new();
     if findings.is_empty() {
         match mode {
-            Mode::Hook => line(&mut out, color, 32, true, "verify", " no secrets in outgoing diff — push allowed"),
+            Mode::Hook => line(
+                &mut out,
+                color,
+                32,
+                true,
+                "verify",
+                " no secrets in outgoing diff — push allowed",
+            ),
+            Mode::Commit => line(
+                &mut out,
+                color,
+                32,
+                true,
+                "verify",
+                " no secrets in the index — commit allowed",
+            ),
             Mode::Scan => line(&mut out, color, 32, true, "verify", " no secrets found"),
         }
         return out;
@@ -77,8 +93,16 @@ pub fn format_verdict(
             out.push_str("       [[allow]]\n");
             out.push_str(&format!("       fingerprint = \"{fp}\"\n"));
         }
-        if mode == Mode::Hook {
-            out.push_str("  →  last resort: git push --no-verify   (auditable, use rarely)\n");
+        match mode {
+            Mode::Hook => {
+                out.push_str("  →  last resort: git push --no-verify   (auditable, use rarely)\n");
+            }
+            Mode::Commit => {
+                out.push_str(
+                    "  →  last resort: git commit --no-verify   (auditable, use rarely)\n",
+                );
+            }
+            Mode::Scan => {}
         }
     } else {
         out.push_str(&format!(
@@ -91,7 +115,13 @@ pub fn format_verdict(
     out
 }
 
-fn write_items(out: &mut String, items: &[&Finding], show_secrets: bool, color: bool, blocked: bool) {
+fn write_items(
+    out: &mut String,
+    items: &[&Finding],
+    show_secrets: bool,
+    color: bool,
+    blocked: bool,
+) {
     for (i, f) in items.iter().enumerate() {
         let tag = if blocked { "[blocked]" } else { "[reported]" };
         out.push_str(&format!(
@@ -120,6 +150,8 @@ fn banner(out: &mut String, color: bool, mode: Mode, blocked: bool) {
     let (code, title) = match (mode, blocked) {
         (Mode::Hook, true) => (31u8, "VERIFY  ·  secret leak detected — push blocked"),
         (Mode::Hook, false) => (33, "VERIFY  ·  findings reported — push allowed"),
+        (Mode::Commit, true) => (31u8, "VERIFY  ·  secret leak detected — commit blocked"),
+        (Mode::Commit, false) => (33, "VERIFY  ·  findings reported — commit allowed"),
         (Mode::Scan, true) => (31, "VERIFY  ·  secret leak detected"),
         (Mode::Scan, false) => (33, "VERIFY  ·  findings reported"),
     };
@@ -244,7 +276,15 @@ mod tests {
 
     #[test]
     fn empty_scan_does_not_talk_about_push() {
-        let t = format_verdict(&[], false, None, None, &Config::default(), Mode::Scan, false);
+        let t = format_verdict(
+            &[],
+            false,
+            None,
+            None,
+            &Config::default(),
+            Mode::Scan,
+            false,
+        );
         assert!(t.contains("no secrets found"));
         assert!(!t.contains("push"));
         assert!(!t.contains("blocked"));
@@ -273,6 +313,23 @@ mod tests {
     }
 
     #[test]
+    fn critical_in_commit_says_commit_blocked() {
+        let f = finding("env-file", Severity::Critical, "vf_env");
+        let t = format_verdict(
+            &[f],
+            false,
+            None,
+            None,
+            &Config::default(),
+            Mode::Commit,
+            false,
+        );
+        assert!(t.contains("commit blocked"));
+        assert!(t.contains("git commit --no-verify"));
+        assert!(!t.contains("git push --no-verify"));
+    }
+
+    #[test]
     fn critical_in_scan_does_not_say_push_blocked() {
         let f = finding("aws-access-key", Severity::Critical, "vf_x");
         let t = format_verdict(&[f], false, None, None, &cfg_high(), Mode::Scan, false);
@@ -285,7 +342,15 @@ mod tests {
     fn severity_orders_critical_first() {
         let med = finding("high-entropy", Severity::Medium, "vf_m");
         let crit = finding("aws-access-key", Severity::Critical, "vf_c");
-        let t = format_verdict(&[med, crit], false, None, None, &cfg_high(), Mode::Hook, false);
+        let t = format_verdict(
+            &[med, crit],
+            false,
+            None,
+            None,
+            &cfg_high(),
+            Mode::Hook,
+            false,
+        );
         let c = t.find("aws-access-key").unwrap();
         let m = t.find("high-entropy").unwrap();
         assert!(c < m, "{t}");

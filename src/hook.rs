@@ -22,26 +22,23 @@ pub fn init_config(force: bool) -> Result<(), String> {
     if path.exists() && force {
         let bak = repo.join("verify.toml.bak");
         fs::copy(&path, &bak).map_err(|e| format!("failed to backup {}: {e}", path.display()))?;
-        println!("\x1b[33mverify\x1b[0m  backed up {} → {}", path.display(), bak.display());
+        println!(
+            "\x1b[33mverify\x1b[0m  backed up {} → {}",
+            path.display(),
+            bak.display()
+        );
     }
     fs::write(&path, config::STARTER_TOML).map_err(|e| e.to_string())?;
     println!("\x1b[32;1mok\x1b[0m wrote {}", path.display());
-    println!("  this only writes config — run `verify install` to enable the pre-push hook");
+    println!("  this only writes config — run `verify install` to enable pre-commit and pre-push");
     Ok(())
 }
 
-pub fn install(force: bool) -> Result<(), String> {
-    let hook = hook_path()?;
-    if hook.exists() {
-        let existing = fs::read_to_string(&hook).unwrap_or_default();
-        if !is_managed_hook(&existing) && !force {
-            return Err(format!(
-                "{} already exists and was not created by Verify (pass --force to replace it; the previous hook is not chained)",
-                hook.display()
-            ));
-        }
-    }
+/// Hooks Verify owns. pre-commit stops the object from being created;
+/// pre-push stops a `--no-verify` commit (or an older leak) from leaving.
+const MANAGED_HOOKS: &[(&str, &str)] = &[("pre-commit", "commit-run"), ("pre-push", "hook-run")];
 
+pub fn install(force: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot resolve verify binary: {e}"))?;
     if !exe.exists() {
         return Err(format!(
@@ -51,40 +48,72 @@ pub fn install(force: bool) -> Result<(), String> {
     }
     probe_exe(&exe)?;
 
-    let script = render_hook_script(&exe);
-    atomic_write_hook(&hook, script.as_bytes())?;
+    for (name, cmd) in MANAGED_HOOKS {
+        install_one(name, cmd, &exe, force)?;
+    }
 
+    println!("  git commit scans the index (new and modified); git push scans the outgoing range");
+    if git::repo_root()
+        .map(|r| !r.join("verify.toml").exists() && !r.join(".verify.toml").exists())
+        .unwrap_or(false)
+    {
+        println!(
+            "  no verify.toml yet — `verify init` writes config only; the hooks are already active"
+        );
+    }
+    Ok(())
+}
+
+fn install_one(name: &str, cmd: &str, exe: &Path, force: bool) -> Result<(), String> {
+    let hook = hook_path_named(name)?;
+    if hook.exists() {
+        let existing = fs::read_to_string(&hook).unwrap_or_default();
+        if !is_managed_hook(&existing) && !force {
+            return Err(format!(
+                "{} already exists and was not created by Verify (pass --force to replace it; the previous hook is not chained)",
+                hook.display()
+            ));
+        }
+    }
+    let script = render_hook_script_cmd(exe, cmd);
+    atomic_write_hook(&hook, script.as_bytes())?;
     println!(
-        "\x1b[32;1mok\x1b[0m installed pre-push hook → {}",
+        "\x1b[32;1mok\x1b[0m installed {name} hook → {}",
         hook.display()
     );
-    println!("  git push will now pause and run Verify on the outgoing diff");
-    if git::repo_root().map(|r| !r.join("verify.toml").exists() && !r.join(".verify.toml").exists()).unwrap_or(false) {
-        println!("  no verify.toml yet — `verify init` writes config only; the hook is already active");
-    }
     Ok(())
 }
 
 pub fn uninstall() -> Result<(), String> {
-    let hook = hook_path()?;
-    if !hook.exists() {
+    let mut removed = 0usize;
+    for (name, _) in MANAGED_HOOKS {
+        let hook = hook_path_named(name)?;
+        if !hook.exists() {
+            continue;
+        }
+        let existing = fs::read_to_string(&hook).unwrap_or_default();
+        if !is_managed_hook(&existing) {
+            return Err(format!(
+                "{} exists but was not created by Verify — remove it by hand",
+                hook.display()
+            ));
+        }
+        fs::remove_file(&hook).map_err(|e| e.to_string())?;
+        println!("\x1b[32;1mok\x1b[0m removed {}", hook.display());
+        removed += 1;
+    }
+    if removed == 0 {
         println!("\x1b[32;1mok\x1b[0m no hook installed");
-        return Ok(());
     }
-    let existing = fs::read_to_string(&hook).unwrap_or_default();
-    if !is_managed_hook(&existing) {
-        return Err(format!(
-            "{} exists but was not created by Verify — remove it by hand",
-            hook.display()
-        ));
-    }
-    fs::remove_file(&hook).map_err(|e| e.to_string())?;
-    println!("\x1b[32;1mok\x1b[0m removed {}", hook.display());
     Ok(())
 }
 
 pub fn hook_path() -> Result<PathBuf, String> {
-    Ok(hooks_dir()?.join("pre-push"))
+    hook_path_named("pre-push")
+}
+
+pub fn hook_path_named(name: &str) -> Result<PathBuf, String> {
+    Ok(hooks_dir()?.join(name))
 }
 
 fn hooks_dir() -> Result<PathBuf, String> {
@@ -96,9 +125,7 @@ fn hooks_dir() -> Result<PathBuf, String> {
     if p.is_absolute() {
         Ok(p)
     } else {
-        Ok(std::env::current_dir()
-            .map_err(|e| e.to_string())?
-            .join(p))
+        Ok(std::env::current_dir().map_err(|e| e.to_string())?.join(p))
     }
 }
 
@@ -117,9 +144,17 @@ pub fn is_managed_hook(contents: &str) -> bool {
 }
 
 pub fn render_hook_script(exe: &Path) -> String {
+    render_hook_script_cmd(exe, "hook-run")
+}
+
+pub fn render_commit_hook_script(exe: &Path) -> String {
+    render_hook_script_cmd(exe, "commit-run")
+}
+
+fn render_hook_script_cmd(exe: &Path, cmd: &str) -> String {
     let quoted = sh_single_quote(&exe.display().to_string());
     format!(
-        "#!/bin/sh\n{HOOK_MARKER_LINE}\n# Reinstall with: verify install --force\nexec {quoted} hook-run \"$@\"\n"
+        "#!/bin/sh\n{HOOK_MARKER_LINE}\n# Reinstall with: verify install --force\nexec {quoted} {cmd} \"$@\"\n"
     )
 }
 
@@ -146,7 +181,11 @@ fn atomic_write_hook(hook: &Path, bytes: &[u8]) -> Result<(), String> {
     if let Some(parent) = hook.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
-    let tmp = hook.with_file_name("pre-push.verify.tmp");
+    let tmp_name = format!(
+        "{}.verify.tmp",
+        hook.file_name().unwrap_or_default().to_string_lossy()
+    );
+    let tmp = hook.with_file_name(tmp_name);
     let write_result = (|| {
         let mut f = fs::File::create(&tmp).map_err(|e| e.to_string())?;
         f.write_all(bytes).map_err(|e| e.to_string())?;
@@ -169,7 +208,10 @@ mod tests {
 
     #[test]
     fn quotes_single_quotes_in_exe_path() {
-        assert_eq!(sh_single_quote("/opt/o'reilly/verify"), "'/opt/o'\\''reilly/verify'");
+        assert_eq!(
+            sh_single_quote("/opt/o'reilly/verify"),
+            "'/opt/o'\\''reilly/verify'"
+        );
     }
 
     #[test]
@@ -184,16 +226,31 @@ mod tests {
     }
 
     #[test]
+    fn commit_script_execs_commit_run() {
+        let script = render_commit_hook_script(Path::new("/usr/bin/verify"));
+        assert!(script.contains("exec '/usr/bin/verify' commit-run \"$@\""));
+        assert!(is_managed_hook(&script));
+    }
+
+    #[test]
     fn marker_must_be_the_first_comment_not_a_substring() {
-        assert!(!is_managed_hook("#!/bin/sh\n# husky\n# mention Managed by Verify in passing\nexit 0\n"));
-        assert!(is_managed_hook("#!/bin/sh\n# Managed by Verify\nexec true\n"));
-        assert!(is_managed_hook("# Managed by Verify — do not edit by hand\n"));
+        assert!(!is_managed_hook(
+            "#!/bin/sh\n# husky\n# mention Managed by Verify in passing\nexit 0\n"
+        ));
+        assert!(is_managed_hook(
+            "#!/bin/sh\n# Managed by Verify\nexec true\n"
+        ));
+        assert!(is_managed_hook(
+            "# Managed by Verify — do not edit by hand\n"
+        ));
         assert!(!is_managed_hook(""));
     }
 
     #[test]
     fn uninstall_rejects_foreign_hook_text() {
-        assert!(!is_managed_hook("#!/bin/sh\nlefthook run pre-push \"$@\"\n"));
+        assert!(!is_managed_hook(
+            "#!/bin/sh\nlefthook run pre-push \"$@\"\n"
+        ));
     }
 
     #[test]

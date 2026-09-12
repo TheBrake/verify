@@ -165,7 +165,9 @@ impl Allow {
             checks.push(rule == rule_id);
         }
         if !self.paths.is_empty() {
-            checks.push(self.path_set.is_match(path.as_str()) || self.paths.iter().any(|p| p == &path));
+            checks.push(
+                self.path_set.is_match(path.as_str()) || self.paths.iter().any(|p| p == &path),
+            );
         }
         if let Some(fp) = &self.fingerprint {
             checks.push(fp == fingerprint);
@@ -193,7 +195,8 @@ impl Allow {
 
 impl Config {
     pub fn is_excluded(&self, path: &str) -> bool {
-        self.exclude_set.is_match(normalize_scan_path(path).as_str())
+        self.exclude_set
+            .is_match(normalize_scan_path(path).as_str())
     }
 }
 
@@ -710,7 +713,7 @@ pub fn normalize_scan_path(path: &str) -> String {
     p
 }
 
-pub const STARTER_TOML: &str = r#"# Verify — local pre-push secret auditor
+pub const STARTER_TOML: &str = r#"# Verify — local pre-commit + pre-push secret auditor
 
 [verify]
 # "any" blocks every finding. "high" only blocks critical/high severity.
@@ -720,6 +723,8 @@ max_file_bytes = 1048576
 entropy_enabled = true
 entropy_min_length = 24
 entropy_threshold = 4.5
+# Block .env / .env.* (except example/sample/template/test) whether the
+# file is newly added or an existing one being modified.
 block_env_files = true
 
 [paths]

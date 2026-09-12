@@ -1,4 +1,4 @@
-# Verify — local pre-push secret auditor
+# Verify — local pre-commit + pre-push secret auditor
 # Copy to the repo root as verify.toml (or run: verify init)
 # Dotfile form `.verify.toml` is also discovered automatically.
 
@@ -10,6 +10,7 @@ max_file_bytes = 1048576
 entropy_enabled = true
 entropy_min_length = 24
 entropy_threshold = 4.5
+# New *and* modified .env / .env.* (not example/sample/template/test).
 block_env_files = true
 
 [paths]

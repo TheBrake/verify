@@ -64,11 +64,13 @@ impl Engine {
 
             let allow = line_allow(&line.text);
 
-            if self.cfg.block_env_files && line.is_new_file && is_env_file(&line.path) {
+            // New *or* modified: an env file in the diff is leaving Git.
+            // Fingerprint is per path, so many + lines collapse to one finding.
+            if self.cfg.block_env_files && is_env_file(&line.path) {
                 if !allow.skips("env-file") {
                     let f = self.make_finding(
                         "env-file",
-                        "Newly added environment file (likely contains secrets)",
+                        "Environment file staged or in outgoing diff (likely contains secrets)",
                         Severity::Critical,
                         line,
                         &line.path,
@@ -207,9 +209,8 @@ pub fn read_files_as_added(
 ) -> Result<Vec<AddedLine>, String> {
     let mut out = Vec::new();
     for path in paths {
-        let meta = std::fs::metadata(path).map_err(|e| {
-            format!("failed to read {}: {e}", path.display())
-        })?;
+        let meta = std::fs::metadata(path)
+            .map_err(|e| format!("failed to read {}: {e}", path.display()))?;
         if meta.len() as usize > max_file_bytes {
             continue;
         }
@@ -222,8 +223,9 @@ pub fn read_files_as_added(
                 path: display.clone(),
                 line_no: i + 1,
                 text: line.to_string(),
-                // File scan is "the whole file is leaving the machine".
-                // Env-file policy must match pre-push (is_new_file from the diff).
+                // File scan treats the whole file as leaving the machine.
+                // Env-file policy no longer depends on is_new_file (new and
+                // modified env paths are both blocked when block_env_files).
                 is_new_file: env,
             });
         }
@@ -479,9 +481,7 @@ mod tests {
 
     #[test]
     fn allow_comment_skips() {
-        let f = scan_line(&format!(
-            r#"password = "supersecret12" // verify:allow"#
-        ));
+        let f = scan_line(&format!(r#"password = "supersecret12" // verify:allow"#));
         assert!(f.is_empty(), "{f:?}");
     }
 
@@ -496,10 +496,7 @@ mod tests {
 
     #[test]
     fn allow_one_rule_only() {
-        let line = format!(
-            r#"{} // verify:allow:aws-access-key"#,
-            real_aws()
-        );
+        let line = format!(r#"{} // verify:allow:aws-access-key"#, real_aws());
         let f = scan_line(&line);
         assert!(f.iter().all(|x| x.rule_id != "aws-access-key"), "{f:?}");
     }
@@ -524,8 +521,16 @@ mod tests {
     fn entropy_returns_every_token_over_threshold() {
         let a = "wJalrXUtnFEMI7MDENGbPxRfiC";
         let b = "n4mQ8vL2pR9sT6wY3uA7cD1eH";
-        assert!(rules::shannon_entropy(a) >= 4.5, "{}", rules::shannon_entropy(a));
-        assert!(rules::shannon_entropy(b) >= 4.5, "{}", rules::shannon_entropy(b));
+        assert!(
+            rules::shannon_entropy(a) >= 4.5,
+            "{}",
+            rules::shannon_entropy(a)
+        );
+        assert!(
+            rules::shannon_entropy(b) >= 4.5,
+            "{}",
+            rules::shannon_entropy(b)
+        );
         let f = scan_line(&format!("{a} {b}"));
         let ent: Vec<_> = f.iter().filter(|x| x.rule_id == "high-entropy").collect();
         assert!(ent.len() >= 2, "expected both tokens, got {f:?}");
@@ -553,6 +558,26 @@ mod tests {
             is_new_file: true,
         }]);
         assert!(f.iter().any(|x| x.rule_id == "env-file"), "{f:?}");
+    }
+
+    #[test]
+    fn block_env_file_when_modified_not_new() {
+        let engine = Engine::new(&Config::default()).unwrap();
+        let f = engine.scan_added_lines(&[AddedLine {
+            path: ".env".into(),
+            line_no: 4,
+            text: "PASSWORD=rotated-secret-99".into(),
+            is_new_file: false,
+        }]);
+        assert!(
+            f.iter().any(|x| x.rule_id == "env-file"),
+            "modified env files must block, got {f:?}"
+        );
+        assert_eq!(
+            f.iter().filter(|x| x.rule_id == "env-file").count(),
+            1,
+            "one env-file finding per path: {f:?}"
+        );
     }
 
     #[test]
@@ -612,11 +637,8 @@ mod tests {
 
     #[test]
     fn read_files_errors_on_missing_path() {
-        let err = read_files_as_added(
-            &[PathBuf::from("/no/such/verify-file-xyz")],
-            1024,
-        )
-        .unwrap_err();
+        let err =
+            read_files_as_added(&[PathBuf::from("/no/such/verify-file-xyz")], 1024).unwrap_err();
         assert!(err.contains("failed to read"), "{err}");
     }
 

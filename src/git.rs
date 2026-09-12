@@ -50,9 +50,7 @@ pub fn git_dir() -> Result<PathBuf, String> {
     if p.is_absolute() {
         Ok(p)
     } else {
-        Ok(std::env::current_dir()
-            .map_err(|e| e.to_string())?
-            .join(p))
+        Ok(std::env::current_dir().map_err(|e| e.to_string())?.join(p))
     }
 }
 
@@ -118,9 +116,22 @@ pub fn added_lines_unpushed() -> Result<Vec<AddedLine>, String> {
 }
 
 pub fn added_lines_vs_head() -> Result<Vec<AddedLine>, String> {
+    // Revisions stay *before* `--`. After `--` Git treats tokens as pathspecs.
     let raw = git_diff_text(&{
         let mut args: Vec<&str> = DIFF_FLAGS.to_vec();
-        args.extend(["--", "HEAD"]);
+        args.extend(["HEAD", "--"]);
+        args
+    })?;
+    diff::parse_unified_diff(&raw)
+}
+
+/// Added lines in the index (`git diff --cached`). Pre-commit scans this:
+/// `git add .` after deleting `.gitignore` shows up here, new and modified.
+pub fn added_lines_staged() -> Result<Vec<AddedLine>, String> {
+    let raw = git_diff_text(&{
+        let mut args: Vec<&str> = DIFF_FLAGS.to_vec();
+        args.insert(3, "--cached");
+        args.push("--");
         args
     })?;
     diff::parse_unified_diff(&raw)
@@ -163,7 +174,8 @@ pub fn merge_base_or_empty(local_sha: &str, remote: Option<&str>) -> String {
 }
 
 fn empty_tree() -> String {
-    git_stdout(&["hash-object", "-t", "tree", "/dev/null"]).unwrap_or_else(|_| EMPTY_TREE.to_string())
+    git_stdout(&["hash-object", "-t", "tree", "/dev/null"])
+        .unwrap_or_else(|_| EMPTY_TREE.to_string())
 }
 
 fn peel_commit(sha: &str) -> Result<String, String> {
@@ -180,9 +192,9 @@ fn diff_range(from: &str, to: &str) -> Result<Vec<AddedLine>, String> {
         DIFF_FLAGS[4],
         DIFF_FLAGS[5],
         DIFF_FLAGS[6],
-        "--",
         from,
         to,
+        "--",
     ])?;
     diff::parse_unified_diff(&raw)
 }
@@ -249,10 +261,15 @@ mod tests {
 
     #[test]
     fn delete_is_local_zero() {
-        let line = format!("(delete) {ZERO_OID} refs/heads/gone abc1110000000000000000000000000000000001\n");
+        let line = format!(
+            "(delete) {ZERO_OID} refs/heads/gone abc1110000000000000000000000000000000001\n"
+        );
         let u = parse(&line);
         assert!(u[0].is_delete());
-        assert_eq!(added_lines_for_update(&u[0], Some("origin")).unwrap().len(), 0);
+        assert_eq!(
+            added_lines_for_update(&u[0], Some("origin")).unwrap().len(),
+            0
+        );
     }
 
     #[test]

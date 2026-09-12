@@ -72,6 +72,7 @@ fn dispatch(args: &[String], stdin: StdinSrc) -> Result<ExitCode, String> {
         }
         "scan" => scan_cmd(&cli, stdin),
         "hook-run" => hook_run(&cli, stdin),
+        "commit-run" => commit_run(&cli),
         "" => match stdin {
             StdinSrc::Terminal => {
                 print_help();
@@ -228,6 +229,25 @@ fn looks_like_oid(s: &str) -> bool {
     s.len() >= 7 && s.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+fn commit_run(cli: &Cli) -> Result<ExitCode, String> {
+    let repo = git::repo_root().ok_or("not inside a git repository")?;
+    let mut cfg = config::load(cli.config_path.as_deref(), &repo)?;
+    apply_fail_on(&mut cfg, cli);
+    let added = git::added_lines_staged()?;
+    if added.is_empty() {
+        eprintln!("verify: nothing staged with added lines — commit allowed");
+        return Ok(ExitCode::SUCCESS);
+    }
+    finish_scan(
+        &cfg,
+        cli.show_secrets,
+        &added,
+        None,
+        None,
+        report::Mode::Commit,
+    )
+}
+
 fn hook_run(cli: &Cli, stdin: StdinSrc) -> Result<ExitCode, String> {
     let repo = git::repo_root().ok_or("not inside a git repository")?;
     let mut cfg = config::load(cli.config_path.as_deref(), &repo)?;
@@ -249,7 +269,14 @@ fn hook_run(cli: &Cli, stdin: StdinSrc) -> Result<ExitCode, String> {
             for update in active {
                 all_added.extend(git::added_lines_for_update(update, cli.remote.as_deref())?);
             }
-            finish_scan(&cfg, cli.show_secrets, &all_added, cli.remote.as_deref(), cli.url.as_deref(), report::Mode::Hook)
+            finish_scan(
+                &cfg,
+                cli.show_secrets,
+                &all_added,
+                cli.remote.as_deref(),
+                cli.url.as_deref(),
+                report::Mode::Hook,
+            )
         }
     }
 }
@@ -292,7 +319,9 @@ fn scan_cmd(cli: &Cli, stdin: StdinSrc) -> Result<ExitCode, String> {
     } else if !cli.paths.is_empty() {
         engine::read_files_as_added(&cli.paths, cfg.max_file_bytes)?
     } else if matches!(&stdin, StdinSrc::Piped(b) if !b.is_empty()) {
-        let StdinSrc::Piped(buf) = stdin else { unreachable!() };
+        let StdinSrc::Piped(buf) = stdin else {
+            unreachable!()
+        };
         crate::diff::parse_unified_diff(&buf)?
     } else if git::repo_root().is_some() {
         scan_unpushed_and_worktree()?
@@ -300,7 +329,14 @@ fn scan_cmd(cli: &Cli, stdin: StdinSrc) -> Result<ExitCode, String> {
         return Err("nothing to scan — pass files, pipe a diff, or run inside a git repo".into());
     };
 
-    finish_scan(&cfg, cli.show_secrets, &added, None, None, report::Mode::Scan)
+    finish_scan(
+        &cfg,
+        cli.show_secrets,
+        &added,
+        None,
+        None,
+        report::Mode::Scan,
+    )
 }
 
 fn scan_unpushed_and_worktree() -> Result<Vec<AddedLine>, String> {
@@ -345,17 +381,18 @@ fn finish_scan(
 fn print_help() {
     print!(
         "\
-verify {ver} — local Git pre-push secret auditor
+verify {ver} — local Git pre-commit + pre-push secret auditor
 
 USAGE:
     verify <COMMAND> [OPTIONS]
 
 COMMANDS:
-    init                 Write verify.toml in the repo root (does not install the hook)
-    install              Install the pre-push hook where Git will run it
-    uninstall            Remove the Verify hook
+    init                 Write verify.toml in the repo root (does not install hooks)
+    install              Install pre-commit and pre-push hooks where Git will run them
+    uninstall            Remove Verify-managed hooks
     scan [FILES]         Scan files, a piped diff, unpushed commits and the working tree
-    hook-run             Entry point used by the Git hook
+    hook-run             Entry point used by the Git pre-push hook
+    commit-run           Entry point used by the Git pre-commit hook
     rules                List built-in detection rules
 
 OPTIONS:
@@ -399,10 +436,7 @@ mod tests {
             classify_stdin("diff --git a/x b/x\n+++ b/x\n"),
             StdinClass::Diff
         );
-        assert_eq!(
-            classify_stdin("+++ b/foo.rs\n+hi\n"),
-            StdinClass::Diff
-        );
+        assert_eq!(classify_stdin("+++ b/foo.rs\n+hi\n"), StdinClass::Diff);
         let line = format!(
             "refs/heads/main abc1110000000000000000000000000000000001 refs/heads/main {ZERO_OID}\n"
         );
@@ -447,7 +481,10 @@ mod tests {
         let cli = parse_cli(&["hook-run".into(), "origin".into(), "url".into()]).unwrap();
         match hook_plan_from_stdin(&cli, StdinSrc::Piped(String::new())) {
             Ok(_) => panic!("expected error"),
-            Err(e) => assert!(e.contains("no ref updates") || e.contains("git repository"), "{e}"),
+            Err(e) => assert!(
+                e.contains("no ref updates") || e.contains("git repository"),
+                "{e}"
+            ),
         }
     }
 

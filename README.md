@@ -1,14 +1,27 @@
 # Verify V1
 
-CLI en Rust que actúa como **hook local de pre-push**. Intercepta `git push`,
-lee solo el diff que está a punto de salir de la máquina y bloquea la subida
-si detecta credenciales, ficheros `.env` nuevos o claves de API.
+CLI en Rust que actúa como **hook local de pre-commit y pre-push**.
+Intercepta `git commit` (índice: archivos **nuevos y modificados**) y
+`git push` (diff saliente). Bloquea credenciales, ficheros `.env` y
+claves de API **antes** de que el objeto exista o deje la máquina.
 
 Diseñada para ser **rápida, offline y memory-safe**. No camina el disco,
 no llama a APIs externas y no verifica secretos en vivo (eso es trabajo
-de CI). El hook tiene que responder en milisegundos.
+de CI). Los hooks tienen que responder en milisegundos.
 
 ```
+git commit
+   │
+   ▼
+pre-commit  →  exec verify commit-run
+   │
+   ▼
+git diff --cached  (solo líneas + del índice)
+   │
+   ├─ nada que bloquee     exit 0  →  el commit se crea
+   ├─ finding que blocks   exit 1  →  el commit no existe
+   └─ hook roto / I/O      exit 2  →  el commit no existe
+
 git push
    │
    ▼
@@ -21,16 +34,13 @@ Git entrega por stdin:
    ▼
 verify pide a Git el unified diff de ese rango (solo líneas +)
    │
-   ▼
-reglas built-in + custom  →  entropy de Shannon (fallback)
-   │
    ├─ nada que bloquee     exit 0  →  el push sigue
    ├─ finding que blocks   exit 1  →  el push se cancela
    └─ hook roto / I/O      exit 2  →  el push se cancela
 ```
 
-`verify install` escribe el hook donde Git lo ejecuta
-(`git rev-parse --git-path hooks`), no a ciegas en `.git/hooks`.
+`verify install` escribe **pre-commit** y **pre-push** donde Git los
+ejecuta (`git rev-parse --git-path hooks`), no a ciegas en `.git/hooks`.
 Respeta `core.hooksPath` y worktrees.
 
 ## Instalación
@@ -38,8 +48,8 @@ Respeta `core.hooksPath` y worktrees.
 ```bash
 cargo install --path . --locked
 cd tu-repositorio
-verify init                 # escribe verify.toml (no instala el hook)
-verify install              # planta pre-push donde Git lo corre
+verify init                 # escribe verify.toml (no instala hooks)
+verify install              # planta pre-commit + pre-push donde Git los corre
 ```
 
 `init` y `install` son dos pasos a propósito. Un repo con config y sin hook
@@ -48,6 +58,9 @@ sigue desprotegido.
 `--force` en `init` pisa `verify.toml` pero deja `verify.toml.bak`.
 `--force` en `install` sustituye un hook ajeno; **no lo encadena**
 (husky / lefthook hay que componerlos a mano).
+
+Reinstala después de actualizar el binario (`verify install --force`)
+para que ambos scripts apunten al `verify` nuevo.
 
 ## Uso
 
@@ -77,8 +90,10 @@ Códigos de salida:
 | 1 | hay al menos un finding que `blocks` |
 | 2 | error de runtime (config rota, hook sin stdin, diff sin path, I/O) |
 
-Un hook mal instalado que no recibe el protocolo de Git **sale 2**, no 0.
-Bypass de emergencia: `git push --no-verify` (auditable; última opción).
+Un pre-push mal instalado que no recibe el protocolo de Git **sale 2**, no 0.
+Bypass de emergencia: `git commit --no-verify` / `git push --no-verify`
+(auditable; última opción). El push sigue siendo red si el commit se
+saltó el primer gancho.
 
 ## Configuración
 
@@ -147,9 +162,14 @@ AWS (`AKIA` / `ASIA` y secret keys), GitHub / GitLab / Slack / Stripe /
 OpenAI (incl. `sk-proj-`), Google, JWT, PEM (`BEGIN … PRIVATE KEY`,
 también ED25519 y ENCRYPTED), connection strings
 Postgres / MySQL / Mongo / Redis, asignaciones `DATABASE_URL` /
-`API_KEY` / `password`, ficheros `.env` nuevos, y tokens de alta
+`API_KEY` / `password`, ficheros `.env` / `.env.*` **nuevos o modificados**
+(no `.env.example` / `.sample` / `.template` / `.test`), y tokens de alta
 entropía desconocidos (fallback: no se emiten si una regla ya pegó
 en esa línea).
+
+El pre-commit mira `git diff --cached`. Si alguien borra `.gitignore` y
+hace `git add .`, el `.env` entra al índice y Verify lo bloquea antes
+de crear el commit. No camina el árbol ni reescribe historia ya grabada.
 
 `verify rules` lista el catálogo y marca cuáles se pueden overridear.
 
