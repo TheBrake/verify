@@ -158,7 +158,7 @@ fn banner(out: &mut String, color: bool, mode: Mode, blocked: bool) {
     let bar = "═".repeat(54);
     out.push_str(&paint(color, code, false, &format!("╔{bar}╗")));
     out.push('\n');
-    out.push_str(&paint(color, code, true, &format!("║   {title:<48} ║")));
+    out.push_str(&paint(color, code, true, &format!("║   {title:<48}   ║")));
     out.push('\n');
     out.push_str(&paint(color, code, false, &format!("╚{bar}╝")));
     out.push('\n');
