@@ -98,6 +98,19 @@ Quitar solo lo que Verify escribió:
 verify uninstall
 ```
 
+### Como tenerlo sin Rust (binario del Release)
+
+```bash
+curl -sSL -o verify \
+  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl"
+install -m 755 verify ~/.local/bin/verify
+cd /ruta/al/repo
+verify install
+```
+Comprueba el checksum publicado junto al binario (`verify-x86_64-unknown-linux-musl.sha256`).
+Apple Silicon: `verify-aarch64-apple-darwin`. Windows no entra en V1.
+
+
 ### Compilar el binario
 
 ```bash
