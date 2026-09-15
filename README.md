@@ -1,103 +1,212 @@
-# Verify V1
+# Verify
 
-CLI en Rust que actúa como **hook local de pre-commit y pre-push**.
-Intercepta `git commit` (índice: archivos **nuevos y modificados**) y
-`git push` (diff saliente). Bloquea credenciales, ficheros `.env` y
-claves de API **antes** de que el objeto exista o deje la máquina.
+Hook local de Git que bloquea secretos **antes** de que existan como commit
+o salgan de tu máquina.
 
-Diseñada para ser **rápida, offline y memory-safe**. No camina el disco,
-no llama a APIs externas y no verifica secretos en vivo (eso es trabajo
-de CI). Los hooks tienen que responder en milisegundos.
+No camina el disco. No llama a internet. No es un antivirus ni un CI.
+Git lo ejecuta en `pre-commit` y `pre-push`; Verify mira solo las líneas
+añadidas (`+`) y decide si el commit o el push siguen. Es como un guardia de
+seguridad que valida quien puede pasar y quien no.
+
+Sirve en cualquier repo (Python, PHP, Go, Rust, no importa).
+Para *usar* Verify hace falta el binario y Git. Cargo y Rust solo hacen
+falta si compilas el proyecto tú.
+
+El producto se llama **Verify**. El comando es `verify`.
+
+---
+
+## Qué espera de ti
+
+1. El binario `verify` en tu `PATH`.
+2. Un repositorio Git.
+3. `verify install` dentro de ese repo.
+
+A partir de ahí, un `git commit` o `git push` normal pasa por Verify.
+No tienes que acordarte de escanear a mano.
+
+---
+
+## Cómo funciona
 
 ```
 git commit
-   │
-   ▼
-pre-commit  →  exec verify commit-run
-   │
-   ▼
-git diff --cached  (solo líneas + del índice)
-   │
-   ├─ nada que bloquee     exit 0  →  el commit se crea
-   ├─ finding que blocks   exit 1  →  el commit no existe
-   └─ hook roto / I/O      exit 2  →  el commit no existe
+    →  hook pre-commit
+    →  verify commit-run
+    →  git diff --cached   (solo líneas + del índice)
+    →  exit 0  el commit se crea
+       exit 1  el commit no existe (hay un secreto)
+       exit 2  Verify falló (config, Git, disco)
 
 git push
-   │
-   ▼
-pre-push  →  exec verify hook-run <remote> <url>
-   │
-   ▼
-Git entrega por stdin:
-   <local-ref> <local-sha> <remote-ref> <remote-sha>
-   │
-   ▼
-verify pide a Git el unified diff de ese rango (solo líneas +)
-   │
-   ├─ nada que bloquee     exit 0  →  el push sigue
-   ├─ finding que blocks   exit 1  →  el push se cancela
-   └─ hook roto / I/O      exit 2  →  el push se cancela
+    →  hook pre-push
+    →  verify hook-run
+    →  Git manda por stdin las refs que salen
+    →  Verify pide el diff de ese rango (solo líneas +)
+    →  exit 0  el push sigue
+       exit 1  el push se cancela
+       exit 2  Verify falló
 ```
 
-`verify install` escribe **pre-commit** y **pre-push** donde Git los
-ejecuta (`git rev-parse --git-path hooks`), no a ciegas en `.git/hooks`.
-Respeta `core.hooksPath` y worktrees.
+`install` planta los scripts donde Git los corre de verdad
+(`git rev-parse --git-path hooks`). Respeta `core.hooksPath` y worktrees.
+No escribe a ciegas en `.git/hooks`.
 
-## Instalación
+Cada script es corto: `exec <ruta-de-verify> commit-run` o `hook-run`.
+Si actualizas el binario, vuelve a correr `verify install --force`.
+
+---
+
+## Instalar en un repo
 
 ```bash
-cargo install --path . --locked
-cd tu-repositorio
-verify init                 # escribe verify.toml (no instala hooks)
-verify install              # planta pre-commit + pre-push donde Git los corre
+verify -v                   # verify 0.1.0 (https://github.com/TheBrake/verify)
+cd /ruta/al/repo
+verify init                 # escribe verify.toml; no activa hooks
+verify install              # planta pre-commit + pre-push
+```
+Aunque si ya están dentro pueden omitir cd, en PowerShell funciona igual.
+
+`init` e `install` son dos pasos. Config sin hook no protege.
+
+`install` imprime las dos rutas y el comando de cada una:
+
+```
+ok installed pre-commit
+  path     …/hooks/pre-commit
+  runs     '…/verify' commit-run "$@"
+  when     git commit  →  scans the index (new and modified files)
+ok installed pre-push
+  path     …/hooks/pre-push
+  runs     '…/verify' hook-run "$@"
+  when     git push    →  scans the outgoing range
 ```
 
-`init` y `install` son dos pasos a propósito. Un repo con config y sin hook
-sigue desprotegido.
-
-`--force` en `init` pisa `verify.toml` pero deja `verify.toml.bak`.
-`--force` en `install` sustituye un hook ajeno; **no lo encadena**
-(husky / lefthook hay que componerlos a mano).
-
-Reinstala después de actualizar el binario (`verify install --force`)
-para que ambos scripts apunten al `verify` nuevo.
-
-## Uso
+¿Como comprobar si está instalado?:
 
 ```bash
-verify scan                          # unpushed + working tree
-verify scan src/config.rs .env       # ficheros sueltos
-git diff origin/main..HEAD | verify scan --diff
-git diff origin/main..HEAD | verify  # sin comando: si parece diff, es scan
-verify rules                         # catálogo built-in (y si son overridable)
+ls "$(git rev-parse --git-path hooks)/pre-commit"
+ls "$(git rev-parse --git-path hooks)/pre-push"
+grep "Managed by Verify" "$(git rev-parse --git-path hooks)/pre-commit"
+```
+
+`--force` en `init` pisa `verify.toml` y deja `verify.toml.bak`.
+`--force` en `install` sustituye un hook que no sea de Verify.
+No encadena husky ni lefthook.
+
+Quita solo lo que Verify escribió:
+
+```bash
 verify uninstall
 ```
 
-Flags útiles:
+### Compilar el binario
+
+```bash
+git clone https://github.com/TheBrake/verify.git
+cd verify
+cargo install --path . --locked
+verify -v
+```
+
+Eso deja `verify` en `PATH`. No instala hooks. Los hooks salen de
+`verify install` dentro del repo que quieres proteger.
+
+MSRV 1.75. Tests: `cargo test --locked`.
+
+---
+
+## Probar que el escudo existe:
+
+Nota: Debes probarlo en otro repo de prueba para evitar problemas.
+
+```bash
+echo 'PASSWORD=rotated-secret-99' >> .env
+git add .env
+git commit -m x
+```
+
+Tiene que salir **1** y no crear commit. El informe habla de `env-file`
+o *commit blocked*. Un commit limpio sale 0.
+
+Atajo de emergencia (deja rastro; última opción):
+
+```bash
+git commit --no-verify
+git push --no-verify
+```
+
+Si te saltas el pre-commit, el pre-push sigue mirando lo que sale.
+`--no-verify` no se puede “apagar” desde Verify: es de Git.
+
+**Lo que ya está en un remote no lo borra este hook.** Si una clave
+llegó a GitHub, rótala.
+
+---
+
+## Códigos de salida
+
+| Código | Significado |
+|---|---|
+| 0 | limpio, o solo avisos por debajo de `fail_on`, o push que solo borra ramas |
+| 1 | hay al menos un hallazgo que bloquea |
+| 2 | error de Verify (config rota, hook sin stdin, I/O) |
+
+Un pre-push mal instalado que no recibe el protocolo de Git sale **2**, no 0.
+Scripts y CI deben tratar 1 y 2 como fallo.
+
+---
+
+## Comandos
+
+```bash
+verify init
+verify install
+verify uninstall
+verify scan                          # unpushed + working tree
+verify scan src/config.rs .env
+git diff origin/main..HEAD | verify scan --diff
+git diff origin/main..HEAD | verify  # si stdin parece diff, es scan
+verify rules
+verify -v
+verify --help
+```
+
+Flags:
 
 ```
 -c, --config PATH         verify.toml explícito
     --fail-on any|high    pisa el TOML (también VERIFY_FAIL_ON)
-    --show-secrets        no redactar snippets
-    --diff                stdin = unified diff (incompatible con FILES)
+    --show-secrets        no redactar el valor encontrado
+    --diff                stdin = unified diff (no se mezcla con FILES)
+    --force               pisa archivos en init / install
 ```
 
-Códigos de salida:
+---
 
-| Código | Significado |
-|---|---|
-| 0 | limpio, o solo findings por debajo de `fail_on`, o push delete-only |
-| 1 | hay al menos un finding que `blocks` |
-| 2 | error de runtime (config rota, hook sin stdin, diff sin path, I/O) |
+## Qué detecta
 
-Un pre-push mal instalado que no recibe el protocolo de Git **sale 2**, no 0.
-Bypass de emergencia: `git commit --no-verify` / `git push --no-verify`
-(auditable; última opción). El push sigue siendo red si el commit se
-saltó el primer gancho.
+Reglas incluidas, sin red:
+
+- AWS (`AKIA` / `ASIA` y secret keys)
+- GitHub, GitLab, Slack, Stripe, OpenAI (incl. `sk-proj-`), Google
+- JWT y PEM (`BEGIN … PRIVATE KEY`, también ED25519 y ENCRYPTED)
+- Connection strings Postgres / MySQL / Mongo / Redis
+- Asignaciones `DATABASE_URL` / `API_KEY` / `password`
+- Ficheros `.env` / `.env.*` **nuevos o modificados**
+  (no `.env.example`, `.sample`, `.template`, `.test`)
+- Tokens de alta entropía desconocidos (solo si ninguna regla pegó ya
+  en esa línea)
+
+El pre-commit mira el índice. Si alguien borra `.gitignore` y hace
+`git add .`, el `.env` entra al stage y Verify lo corta antes de crear
+el commit.
+
+---
 
 ## Configuración
 
-Se busca, en este orden:
+Orden de búsqueda:
 
 1. `-c` / `--config`
 2. `verify.toml` en la raíz del repo
@@ -105,7 +214,7 @@ Se busca, en este orden:
 
 ```toml
 [verify]
-fail_on = "any"          # any | high  (high = solo critical/high)
+fail_on = "any"          # any = todo; high = solo critical/high
 redact = true
 max_file_bytes = 1048576
 entropy_enabled = true
@@ -116,30 +225,14 @@ block_env_files = true
 [paths]
 replace_excludes = false
 exclude = ["**/tests/fixtures/**", "**/*.md"]
-
-[[rules]]
-id = "prod-postgres"
-description = "No production PostgreSQL connection strings"
-pattern = '(?i)postgres(?:ql)?://[^\s]+:[^\s]+@[^\s]*(?:prod|production)'
-severity = "critical"
-keywords = ["postgres"]
-# path = "**/*.env"
-# entropy = 3.5
-# secret_group = 1
-
-[[allow]]
-rule = "generic-api-key"
-paths = ["testdata/sample.env"]
-contains = "EXAMPLE_NOT_A_REAL_KEY"
-condition = "and"
-# fingerprint = "vf_…"
 ```
 
-- Reusar el `id` de una built-in **la sustituye**.
-- Claves desconocidas o reglas sin `id`/`pattern` fallan al cargar. No hay
-  “config rota y el hook pasa”.
-- `fail_on = "high"` deja los Medium (p. ej. `high-entropy`) como
-  **reported**: salen en el informe y el hook sigue en 0.
+Una regla tuya con el mismo `id` que una incluida **la sustituye**.
+Claves desconocidas o reglas sin `id`/`pattern` fallan al cargar:
+el hook no pasa “porque la config está rota”.
+
+`fail_on = "high"` deja los Medium (p. ej. `high-entropy`) como aviso:
+salen en el informe y el hook sigue en 0.
 
 Silencio por línea, solo en un comentario real (`#`, `//`, `/*`, `--`):
 
@@ -148,37 +241,26 @@ password = "…"  // verify:allow
 token = "…"     // verify:allow:jwt
 ```
 
-Un valor que *contenga* el texto `verify:allow` no apaga el hook.
-También se puede pegar en `verify.toml` el fingerprint que imprime el reporte:
+Si el texto `verify:allow` va *dentro* del valor, no cuenta.
+También puedes pegar el fingerprint que imprime el informe:
 
 ```toml
 [[allow]]
 fingerprint = "vf_…"
 ```
 
-## Qué detecta de serie
+Plantilla completa: `verify.toml.example` en este repo, o `verify init`.
 
-AWS (`AKIA` / `ASIA` y secret keys), GitHub / GitLab / Slack / Stripe /
-OpenAI (incl. `sk-proj-`), Google, JWT, PEM (`BEGIN … PRIVATE KEY`,
-también ED25519 y ENCRYPTED), connection strings
-Postgres / MySQL / Mongo / Redis, asignaciones `DATABASE_URL` /
-`API_KEY` / `password`, ficheros `.env` / `.env.*` **nuevos o modificados**
-(no `.env.example` / `.sample` / `.template` / `.test`), y tokens de alta
-entropía desconocidos (fallback: no se emiten si una regla ya pegó
-en esa línea).
+---
 
-El pre-commit mira `git diff --cached`. Si alguien borra `.gitignore` y
-hace `git add .`, el `.env` entra al índice y Verify lo bloquea antes
-de crear el commit. No camina el árbol ni reescribe historia ya grabada.
-
-`verify rules` lista el catálogo y marca cuáles se pueden overridear.
-
-## Límites a propósito
+## Límites
 
 - Solo líneas añadidas del diff (y los ficheros que pases a `scan`).
-  No es un historial tipo `git log -p`.
-- `max_file_bytes` se aplica al archivo entero, no a la línea.
-- Color ANSI solo si stderr es TTY. En CI el fingerprint se copia limpio.
-- MSRV **1.75**. Compilar y testear con `cargo test --locked`.
+  No recorre historia (`git log -p`) ni untracked sin stage.
+- `max_file_bytes` vale para el archivo entero, no para una línea.
+- Color ANSI solo si stderr es una terminal.
+- No rota credenciales. No limpia un remote. No sustituye un scanner de CI.
 
-## Por TheBrakesito (TheBrake) 
+---
+
+Por TheBrake. 

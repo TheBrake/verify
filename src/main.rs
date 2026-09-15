@@ -140,8 +140,8 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
                 print_help();
                 std::process::exit(0);
             }
-            "-V" | "--version" => {
-                println!("verify {}", env!("CARGO_PKG_VERSION"));
+            "-v" | "--version" => {
+                print_version();
                 std::process::exit(0);
             }
             s if s.starts_with('-') => {
@@ -378,13 +378,30 @@ fn finish_scan(
     }
 }
 
+fn print_version() {
+    println!(
+        "verify {} ({})",
+        env!("CARGO_PKG_VERSION"),
+        env!("CARGO_PKG_REPOSITORY")
+    );
+}
+
 fn print_help() {
     print!(
         "\
-verify {ver} — local Git pre-commit + pre-push secret auditor
+verify {ver} — standalone Git pre-commit + pre-push secret auditor
+              binary + Git; Cargo/Rust are not required to *use* it
 
 USAGE:
     verify <COMMAND> [OPTIONS]
+
+USE (any Git repo, any language):
+    verify init                 write verify.toml (does not enable hooks)
+    verify install              plant pre-commit + pre-push where Git runs them
+    verify uninstall            remove only Verify-managed hooks
+
+BUILD (only if you develop Verify itself):
+    cargo install --path . --locked
 
 COMMANDS:
     init                 Write verify.toml in the repo root (does not install hooks)
@@ -402,7 +419,16 @@ OPTIONS:
         --diff           Treat stdin as a unified diff (scan)
         --force          Overwrite existing files (init/install)
     -h, --help
-    -V, --version
+    -v, --version
+
+EXIT CODES:
+    0   clean, or only findings below fail_on, or a delete-only push
+    1   at least one finding that blocks
+    2   runtime error (bad config, hook with no stdin, I/O)
+
+Emergency bypass (auditable): git commit --no-verify / git push --no-verify
+Hooks do not delete secrets already on a remote — rotate those credentials.
+(Deberia hacerlo en español, no?)
 ",
         ver = env!("CARGO_PKG_VERSION")
     );
