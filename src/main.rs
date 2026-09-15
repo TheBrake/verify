@@ -405,6 +405,12 @@ USE (any Git repo, any language):
     verify update               rebuild the binary (from this source) and replant hooks
     verify uninstall            remove only Verify-managed hooks
 
+RELEASE (no Rust on the machine that uses Verify):
+    # download verify-x86_64-unknown-linux-musl from GitHub Releases, then:
+    install -m 755 verify ~/.local/bin/verify
+    cd /path/to/any/repo
+    verify install
+
 BUILD (only if you develop Verify itself):
     cargo install --path . --locked
     verify update               same rebuild + hook replant, from the Verify clone
