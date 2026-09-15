@@ -1,3 +1,6 @@
+//! Fase 1 — contrato de producto (identidad + UX de install).
+//! No añade detectores. El núcleo sigue congelado en phase0_freeze.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -86,10 +89,10 @@ fn hooks_dir(repo: &Path) -> PathBuf {
 #[test]
 fn version_identifies_verify_repo_not_a_foreign_crate() {
     let repo = init_repo();
-    let out = verify(&repo, &["-v"]);
+    let out = verify(&repo, &["-V"]);
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(out.status.success(), "verify -v failed:\n{stderr}");
+    assert!(out.status.success(), "verify -V failed:\n{stderr}");
     assert!(
         stdout.starts_with("verify "),
         "product name must be verify:\n{stdout}"
@@ -100,11 +103,11 @@ fn version_identifies_verify_repo_not_a_foreign_crate() {
     );
     assert!(
         stdout.contains("github.com/TheBrake/verify"),
-        "-v must point at TheBrake/verify, not another crate:\n{stdout}"
+        "-V must point at TheBrake/verify, not another crate:\n{stdout}"
     );
     assert!(
         !stdout.to_ascii_lowercase().contains("colprotect"),
-        "-v must not look like colprotect_backend:\n{stdout}"
+        "-V must not look like colprotect_backend:\n{stdout}"
     );
     let _ = fs::remove_dir_all(&repo);
 }
@@ -175,5 +178,28 @@ fn install_prints_both_hook_paths_and_the_command_each_runs() {
         "install should warn that already-pushed secrets must be rotated:\n{stdout}"
     );
 
+    let _ = fs::remove_dir_all(&repo);
+}
+
+#[test]
+fn update_outside_source_replants_hooks_without_cargo() {
+    let repo = init_repo();
+    let out = verify(&repo, &["update"]);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "update failed:\n{stderr}\n{stdout}");
+    assert!(
+        stdout.contains("not the Verify source") || stdout.contains("cwd is not the Verify source"),
+        "update in a random repo must not cargo-install:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("running cargo install") && !stdout.contains("install --path"),
+        "must not spawn cargo outside the source:\n{stdout}"
+    );
+    let dir = hooks_dir(&repo);
+    assert!(dir.join("pre-commit").is_file());
+    assert!(dir.join("pre-push").is_file());
+    assert!(stdout.contains("commit-run"), "{stdout}");
+    assert!(stdout.contains("hook-run"), "{stdout}");
     let _ = fs::remove_dir_all(&repo);
 }

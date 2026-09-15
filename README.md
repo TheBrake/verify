@@ -5,8 +5,7 @@ o salgan de tu máquina.
 
 No camina el disco. No llama a internet. No es un antivirus ni un CI.
 Git lo ejecuta en `pre-commit` y `pre-push`; Verify mira solo las líneas
-añadidas (`+`) y decide si el commit o el push siguen. Es como un guardia de
-seguridad que valida quien puede pasar y quien no.
+añadidas (`+`) y decide si el commit o el push siguen.
 
 Sirve en cualquier repo (Python, PHP, Go, Rust, no importa).
 Para *usar* Verify hace falta el binario y Git. Cargo y Rust solo hacen
@@ -65,7 +64,6 @@ cd /ruta/al/repo
 verify init                 # escribe verify.toml; no activa hooks
 verify install              # planta pre-commit + pre-push
 ```
-Aunque si ya están dentro pueden omitir cd, en PowerShell funciona igual.
 
 `init` e `install` son dos pasos. Config sin hook no protege.
 
@@ -82,7 +80,7 @@ ok installed pre-push
   when     git push    →  scans the outgoing range
 ```
 
-¿Como comprobar si está instalado?:
+Comprobar:
 
 ```bash
 ls "$(git rev-parse --git-path hooks)/pre-commit"
@@ -94,7 +92,7 @@ grep "Managed by Verify" "$(git rev-parse --git-path hooks)/pre-commit"
 `--force` en `install` sustituye un hook que no sea de Verify.
 No encadena husky ni lefthook.
 
-Quita solo lo que Verify escribió:
+Quitar solo lo que Verify escribió:
 
 ```bash
 verify uninstall
@@ -112,13 +110,23 @@ verify -v
 Eso deja `verify` en `PATH`. No instala hooks. Los hooks salen de
 `verify install` dentro del repo que quieres proteger.
 
+Después de un `git pull` en este repo:
+
+```bash
+cd ~/verify
+verify update
+```
+
+`update` corre `cargo install --path . --locked --force` y vuelve a
+plantar los hooks contra el binario nuevo. No hace `git pull` solo.
+Si lo corres en un repo que no es este source, solo reescribe hooks
+al `verify` que ya está en `PATH`.
+
 MSRV 1.75. Tests: `cargo test --locked`.
 
 ---
 
-## Probar que el escudo existe:
-
-Nota: Debes probarlo en otro repo de prueba para evitar problemas.
+## Probar que el candado existe
 
 ```bash
 echo 'PASSWORD=rotated-secret-99' >> .env
@@ -162,6 +170,7 @@ Scripts y CI deben tratar 1 y 2 como fallo.
 ```bash
 verify init
 verify install
+verify update               # rebuild + replant (from the Verify clone)
 verify uninstall
 verify scan                          # unpushed + working tree
 verify scan src/config.rs .env
@@ -263,4 +272,4 @@ Plantilla completa: `verify.toml.example` en este repo, o `verify init`.
 
 ---
 
-Por TheBrake. 
+Por (TheBrake)

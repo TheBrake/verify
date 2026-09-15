@@ -6,7 +6,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// First comment line of a Verify-managed hook.
+/// First comment line of a Verify-managed hook. Ownership is this line, not a
+/// substring anywhere in the file.
 pub const HOOK_MARKER_LINE: &str = "# Managed by Verify";
 
 pub fn init_config(force: bool) -> Result<(), String> {
@@ -33,25 +34,59 @@ pub fn init_config(force: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Los hooks de verificación actúan así: pre-commit impide la creación del objeto;
-/// pre-push evita que salga un commit realizado con `--no-verify`.
+/// Hooks Verify owns. pre-commit stops the object from being created;
+/// pre-push stops a `--no-verify` commit (or an older leak) from leaving.
 const MANAGED_HOOKS: &[(&str, &str)] = &[("pre-commit", "commit-run"), ("pre-push", "hook-run")];
 
 pub fn install(force: bool) -> Result<(), String> {
     let exe = std::env::current_exe().map_err(|e| format!("cannot resolve verify binary: {e}"))?;
+    install_exe(&exe, force)
+}
+
+/// Rebuild the PATH binary when cwd is the Verify source tree, then replant
+/// hooks so Git does not keep exec'ing yesterday's executable.
+///
+/// Does not `git pull`. Fetching source is the operator's call.
+pub fn update() -> Result<(), String> {
+    let exe = match find_verify_source() {
+        Some(src) => {
+            println!("\x1b[32;1mok\x1b[0m source   {}", src.display());
+            cargo_install(&src)?;
+            let installed = cargo_bin_verify().ok_or_else(|| {
+                "cargo install finished but ~/.cargo/bin/verify is missing — check CARGO_HOME"
+                    .to_string()
+            })?;
+            println!("\x1b[32;1mok\x1b[0m binary   {}", installed.display());
+            installed
+        }
+        None => {
+            let exe = std::env::current_exe()
+                .map_err(|e| format!("cannot resolve verify binary: {e}"))?;
+            println!(
+                "\x1b[33mverify\x1b[0m  cwd is not the Verify source — hooks will keep this binary"
+            );
+            println!("  {}", exe.display());
+            println!("  to rebuild after a pull: cd into the Verify clone, then verify update");
+            exe
+        }
+    };
+    install_exe(&exe, true)
+}
+
+fn install_exe(exe: &Path, force: bool) -> Result<(), String> {
     if !exe.exists() {
         return Err(format!(
             "verify binary is not resolvable at {} — install a stable binary before `verify install`",
             exe.display()
         ));
     }
-    probe_exe(&exe)?;
+    probe_exe(exe)?;
 
     for (name, cmd) in MANAGED_HOOKS {
-        install_one(name, cmd, &exe, force)?;
+        install_one(name, cmd, exe, force)?;
     }
 
-    print_install_footer(&exe);
+    print_install_footer(exe);
     if git::repo_root()
         .map(|r| !r.join("verify.toml").exists() && !r.join(".verify.toml").exists())
         .unwrap_or(false)
@@ -61,6 +96,68 @@ pub fn install(force: bool) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+pub fn find_verify_source() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    cwd.ancestors().find_map(|dir| {
+        if is_verify_source(dir) {
+            Some(dir.to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
+pub fn is_verify_source(dir: &Path) -> bool {
+    let cargo = dir.join("Cargo.toml");
+    let Ok(text) = fs::read_to_string(&cargo) else {
+        return false;
+    };
+    let named = text.lines().any(|l| {
+        let l = l.trim();
+        l == "name = \"sverify\"" || l == "name = \"verify\""
+    });
+    named && dir.join("src").join("main.rs").is_file()
+}
+
+fn cargo_install(src: &Path) -> Result<(), String> {
+    let cargo = cargo_bin();
+    println!(
+        "  running {cargo} install --path {} --locked --force",
+        src.display()
+    );
+    let status = Command::new(&cargo)
+        .args(["install", "--path"])
+        .arg(src)
+        .args(["--locked", "--force"])
+        .status()
+        .map_err(|e| format!("failed to spawn {cargo}: {e}"))?;
+    if !status.success() {
+        return Err(format!(
+            "{cargo} install failed with {status} — fix the build, then retry verify update"
+        ));
+    }
+    Ok(())
+}
+
+fn cargo_bin() -> String {
+    std::env::var("CARGO")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "cargo".into())
+}
+
+fn cargo_bin_verify() -> Option<PathBuf> {
+    let home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))?;
+    let p = home.join("bin").join("verify");
+    if p.is_file() {
+        Some(p)
+    } else {
+        None
+    }
 }
 
 fn install_one(name: &str, cmd: &str, exe: &Path, force: bool) -> Result<(), String> {
@@ -80,8 +177,8 @@ fn install_one(name: &str, cmd: &str, exe: &Path, force: bool) -> Result<(), Str
     Ok(())
 }
 
-/// Un bloque de hook impreso por `verify install`. Lo suficientemente estable como para buscarlo con `grep` en las pruebas
-/// y para que un compañero de equipo confirme qué comando ejecutará Git.
+/// One hook block printed by `verify install`. Stable enough to grep in tests
+/// and for a teammate to confirm which command Git will exec.
 pub fn format_install_line(name: &str, cmd: &str, hook: &Path, exe: &Path) -> String {
     let quoted = sh_single_quote(&exe.display().to_string());
     let when = match name {
@@ -99,7 +196,7 @@ fn print_install_footer(exe: &Path) {
     println!("  binary   {}", exe.display());
     println!("  git commit is the lock; git push is the second net");
     println!("  secrets already on a remote are not deleted by these hooks — rotate them");
-    println!("  reinstall after upgrading the binary: verify install --force");
+    println!("  after a new binary: verify update");
 }
 
 pub fn uninstall() -> Result<(), String> {
@@ -172,7 +269,7 @@ pub fn render_commit_hook_script(exe: &Path) -> String {
 fn render_hook_script_cmd(exe: &Path, cmd: &str) -> String {
     let quoted = sh_single_quote(&exe.display().to_string());
     format!(
-        "#!/bin/sh\n{HOOK_MARKER_LINE}\n# Reinstall with: verify install --force\nexec {quoted} {cmd} \"$@\"\n"
+        "#!/bin/sh\n{HOOK_MARKER_LINE}\n# Reinstall with: verify update\nexec {quoted} {cmd} \"$@\"\n"
     )
 }
 
@@ -182,12 +279,12 @@ pub fn sh_single_quote(s: &str) -> String {
 
 fn probe_exe(exe: &Path) -> Result<(), String> {
     let out = Command::new(exe)
-        .arg("-v")
+        .arg("--version")
         .output()
         .map_err(|e| format!("installed binary cannot start ({}): {e}", exe.display()))?;
     if !out.status.success() {
         return Err(format!(
-            "installed binary {} -v failed with status {}",
+            "installed binary {} --version failed with status {}",
             exe.display(),
             out.status
         ));
@@ -307,6 +404,25 @@ mod tests {
         let mode = fs::metadata(&hook).unwrap().permissions().mode();
         assert_eq!(mode & 0o111, 0o111);
         assert!(!dir.join("pre-push.verify.tmp").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn source_tree_needs_sverify_manifest_and_main() {
+        let dir = std::env::temp_dir().join(format!("verify-src-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        assert!(!is_verify_source(&dir));
+        fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"sverify\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        assert!(is_verify_source(&dir));
+        let other = dir.join("app");
+        fs::create_dir_all(&other).unwrap();
+        assert!(!is_verify_source(&other));
         let _ = fs::remove_dir_all(&dir);
     }
 }
