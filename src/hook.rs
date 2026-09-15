@@ -6,8 +6,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// First comment line of a Verify-managed hook. Ownership is this line, not a
-/// substring anywhere in the file.
+/// First comment line of a Verify-managed hook.
 pub const HOOK_MARKER_LINE: &str = "# Managed by Verify";
 
 pub fn init_config(force: bool) -> Result<(), String> {
@@ -34,8 +33,8 @@ pub fn init_config(force: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Hooks Verify owns. pre-commit stops the object from being created;
-/// pre-push stops a `--no-verify` commit (or an older leak) from leaving.
+/// Los hooks de verificación actúan así: pre-commit impide la creación del objeto;
+/// pre-push evita que salga un commit realizado con `--no-verify`.
 const MANAGED_HOOKS: &[(&str, &str)] = &[("pre-commit", "commit-run"), ("pre-push", "hook-run")];
 
 pub fn install(force: bool) -> Result<(), String> {
@@ -52,7 +51,7 @@ pub fn install(force: bool) -> Result<(), String> {
         install_one(name, cmd, &exe, force)?;
     }
 
-    println!("  git commit scans the index (new and modified); git push scans the outgoing range");
+    print_install_footer(&exe);
     if git::repo_root()
         .map(|r| !r.join("verify.toml").exists() && !r.join(".verify.toml").exists())
         .unwrap_or(false)
@@ -77,11 +76,30 @@ fn install_one(name: &str, cmd: &str, exe: &Path, force: bool) -> Result<(), Str
     }
     let script = render_hook_script_cmd(exe, cmd);
     atomic_write_hook(&hook, script.as_bytes())?;
-    println!(
-        "\x1b[32;1mok\x1b[0m installed {name} hook → {}",
-        hook.display()
-    );
+    print!("{}", format_install_line(name, cmd, &hook, exe));
     Ok(())
+}
+
+/// Un bloque de hook impreso por `verify install`. Lo suficientemente estable como para buscarlo con `grep` en las pruebas
+/// y para que un compañero de equipo confirme qué comando ejecutará Git.
+pub fn format_install_line(name: &str, cmd: &str, hook: &Path, exe: &Path) -> String {
+    let quoted = sh_single_quote(&exe.display().to_string());
+    let when = match name {
+        "pre-commit" => "git commit  →  scans the index (new and modified files)",
+        "pre-push" => "git push    →  scans the outgoing range",
+        _ => "git hook",
+    };
+    format!(
+        "\x1b[32;1mok\x1b[0m installed {name}\n  path     {}\n  runs     {quoted} {cmd} \"$@\"\n  when     {when}\n",
+        hook.display()
+    )
+}
+
+fn print_install_footer(exe: &Path) {
+    println!("  binary   {}", exe.display());
+    println!("  git commit is the lock; git push is the second net");
+    println!("  secrets already on a remote are not deleted by these hooks — rotate them");
+    println!("  reinstall after upgrading the binary: verify install --force");
 }
 
 pub fn uninstall() -> Result<(), String> {
@@ -164,12 +182,12 @@ pub fn sh_single_quote(s: &str) -> String {
 
 fn probe_exe(exe: &Path) -> Result<(), String> {
     let out = Command::new(exe)
-        .arg("-V")
+        .arg("-v")
         .output()
         .map_err(|e| format!("installed binary cannot start ({}): {e}", exe.display()))?;
     if !out.status.success() {
         return Err(format!(
-            "installed binary {} -V failed with status {}",
+            "installed binary {} -v failed with status {}",
             exe.display(),
             out.status
         ));
@@ -212,6 +230,30 @@ mod tests {
             sh_single_quote("/opt/o'reilly/verify"),
             "'/opt/o'\\''reilly/verify'"
         );
+    }
+
+    #[test]
+    fn install_line_names_path_and_command() {
+        let text = format_install_line(
+            "pre-commit",
+            "commit-run",
+            Path::new("/repo/.git/hooks/pre-commit"),
+            Path::new("/usr/bin/verify"),
+        );
+        assert!(text.contains("/repo/.git/hooks/pre-commit"), "{text}");
+        assert!(text.contains("commit-run"), "{text}");
+        assert!(text.contains("'/usr/bin/verify'"), "{text}");
+        assert!(text.contains("git commit"), "{text}");
+
+        let push = format_install_line(
+            "pre-push",
+            "hook-run",
+            Path::new("/repo/.git/hooks/pre-push"),
+            Path::new("/usr/bin/verify"),
+        );
+        assert!(push.contains("/repo/.git/hooks/pre-push"), "{push}");
+        assert!(push.contains("hook-run"), "{push}");
+        assert!(push.contains("git push"), "{push}");
     }
 
     #[test]
