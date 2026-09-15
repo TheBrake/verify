@@ -62,6 +62,10 @@ fn dispatch(args: &[String], stdin: StdinSrc) -> Result<ExitCode, String> {
             hook::install(cli.force)?;
             Ok(ExitCode::SUCCESS)
         }
+        "update" => {
+            hook::update()?;
+            Ok(ExitCode::SUCCESS)
+        }
         "uninstall" => {
             hook::uninstall()?;
             Ok(ExitCode::SUCCESS)
@@ -140,7 +144,7 @@ fn parse_cli(args: &[String]) -> Result<Cli, String> {
                 print_help();
                 std::process::exit(0);
             }
-            "-v" | "--version" => {
+            "-v" | "-V" | "--version" => {
                 print_version();
                 std::process::exit(0);
             }
@@ -398,14 +402,17 @@ USAGE:
 USE (any Git repo, any language):
     verify init                 write verify.toml (does not enable hooks)
     verify install              plant pre-commit + pre-push where Git runs them
+    verify update               rebuild the binary (from this source) and replant hooks
     verify uninstall            remove only Verify-managed hooks
 
 BUILD (only if you develop Verify itself):
     cargo install --path . --locked
+    verify update               same rebuild + hook replant, from the Verify clone
 
 COMMANDS:
     init                 Write verify.toml in the repo root (does not install hooks)
     install              Install pre-commit and pre-push hooks where Git will run them
+    update               Rebuild via cargo when cwd is this source; always replant hooks
     uninstall            Remove Verify-managed hooks
     scan [FILES]         Scan files, a piped diff, unpushed commits and the working tree
     hook-run             Entry point used by the Git pre-push hook
@@ -428,7 +435,6 @@ EXIT CODES:
 
 Emergency bypass (auditable): git commit --no-verify / git push --no-verify
 Hooks do not delete secrets already on a remote — rotate those credentials.
-(Deberia hacerlo en español, no?)
 ",
         ver = env!("CARGO_PKG_VERSION")
     );
