@@ -4,62 +4,44 @@ Hook local de Git que bloquea secretos **antes** de que existan como commit
 o salgan de tu máquina.
 
 No camina el disco. No llama a internet. No es un antivirus ni un CI.
-Git lo ejecuta en `pre-commit` y `pre-push`; Verify mira solo las líneas
+Git lo ejecuta en `pre-commit` y `pre-push`. Verify mira solo las líneas
 añadidas (`+`) y decide si el commit o el push siguen.
 
-Sirve en cualquier repo (Python, PHP, Go, Rust, no importa).
-Para *usar* Verify hace falta el binario y Git. Cargo y Rust solo hacen
-falta si compilas el proyecto tú.
+Sirve en cualquier repo: Python, PHP, Go, Rust, da igual.
+Para *usar* Verify hacen falta el binario y Git. No hace falta saber Rust.
 
-El producto se llama **Verify**. El comando es `verify`.
-
----
-
-## Qué espera de ti
-
-1. El binario `verify` en tu `PATH`.
-2. Un repositorio Git.
-3. `verify install` dentro de ese repo.
-
-A partir de ahí, un `git commit` o `git push` normal pasa por Verify.
-No tienes que acordarte de escanear a mano.
+El producto se llama **Verify** y el comando es... `verify`.
 
 ---
 
-## Cómo funciona
+## Tener el binario
 
-```
-git commit
-    →  hook pre-commit
-    →  verify commit-run
-    →  git diff --cached   (solo líneas + del índice)
-    →  exit 0  el commit se crea
-       exit 1  el commit no existe (hay un secreto)
-       exit 2  Verify falló (config, Git, disco)
-
-git push
-    →  hook pre-push
-    →  verify hook-run
-    →  Git manda por stdin las refs que salen
-    →  Verify pide el diff de ese rango (solo líneas +)
-    →  exit 0  el push sigue
-       exit 1  el push se cancela
-       exit 2  Verify falló
-```
-
-`install` planta los scripts donde Git los corre de verdad
-(`git rev-parse --git-path hooks`). Respeta `core.hooksPath` y worktrees.
-No escribe a ciegas en `.git/hooks`.
-
-Cada script es corto: `exec <ruta-de-verify> commit-run` o `hook-run`.
-Si actualizas el binario, vuelve a correr `verify install --force`.
-
----
-
-## Instalar en un repo
+Linux x86_64 (fichero estático). Sustituye `TAG` por la etiqueta del
+[Release](https://github.com/TheBrake/verify/releases):
 
 ```bash
-verify -v                   # verify 0.1.0 (https://github.com/TheBrake/verify)
+curl -sSL -o verify-x86_64-unknown-linux-musl \
+  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl"
+curl -sSL -o verify-x86_64-unknown-linux-musl.sha256 \
+  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl.sha256"
+sha256sum -c verify-x86_64-unknown-linux-musl.sha256
+install -m 755 verify-x86_64-unknown-linux-musl ~/.local/bin/verify
+verify -v
+```
+
+El checksum lista el nombre largo del artefacto; no renombres el fichero
+hasta *después* de `sha256sum -c`.
+
+Apple Silicon: el mismo flujo con `verify-aarch64-apple-darwin` y
+`shasum -a 256 -c`. Windows no entra en V1 (los hooks son scripts Unix).
+
+---
+
+## Instalarlo en un repo
+
+En el repositorio que quieres proteger (el de tu app, no este):
+
+```bash
 cd /ruta/al/repo
 verify init                 # escribe verify.toml; no activa hooks
 verify install              # planta pre-commit + pre-push
@@ -67,7 +49,7 @@ verify install              # planta pre-commit + pre-push
 
 `init` e `install` son dos pasos. Config sin hook no protege.
 
-`install` imprime las dos rutas y el comando de cada una:
+`install` imprime las dos rutas y qué corre cada una:
 
 ```
 ok installed pre-commit
@@ -80,7 +62,9 @@ ok installed pre-push
   when     git push    →  scans the outgoing range
 ```
 
-Comprobar:
+Los scripts van donde Git los ejecuta de verdad
+(`git rev-parse --git-path hooks`). Respeta `core.hooksPath` y worktrees.
+No escribe a ciegas en `.git/hooks`.
 
 ```bash
 ls "$(git rev-parse --git-path hooks)/pre-commit"
@@ -92,50 +76,12 @@ grep "Managed by Verify" "$(git rev-parse --git-path hooks)/pre-commit"
 `--force` en `install` sustituye un hook que no sea de Verify.
 No encadena husky ni lefthook.
 
-Quitar solo lo que Verify escribió:
-
 ```bash
-verify uninstall
+verify uninstall            # solo quita lo que Verify escribió
 ```
 
-### Como tenerlo sin Rust (binario del Release)
-
-```bash
-curl -sSL -o verify \
-  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl"
-install -m 755 verify ~/.local/bin/verify
-cd /ruta/al/repo
-verify install
-```
-Comprueba el checksum publicado junto al binario (`verify-x86_64-unknown-linux-musl.sha256`).
-Apple Silicon: `verify-aarch64-apple-darwin`. Windows no entra en V1.
-
-
-### Compilar el binario
-
-```bash
-git clone https://github.com/TheBrake/verify.git
-cd verify
-cargo install --path . --locked
-verify -v
-```
-
-Eso deja `verify` en `PATH`. No instala hooks. Los hooks salen de
-`verify install` dentro del repo que quieres proteger.
-
-Después de un `git pull` en este repo:
-
-```bash
-cd ~/verify
-verify update
-```
-
-`update` corre `cargo install --path . --locked --force` y vuelve a
-plantar los hooks contra el binario nuevo. No hace `git pull` solo.
-Si lo corres en un repo que no es este source, solo reescribe hooks
-al `verify` que ya está en `PATH`.
-
-MSRV 1.75. Tests: `cargo test --locked`.
+Si actualizas el binario, vuelve a correr `verify install` (o
+`verify update` en ese repo: replanta hooks, no recompila).
 
 ---
 
@@ -165,6 +111,33 @@ llegó a GitHub, rótala.
 
 ---
 
+## Cómo funciona
+
+```
+git commit
+    →  hook pre-commit
+    →  verify commit-run
+    →  git diff --cached   (solo líneas + del índice)
+    →  exit 0  el commit se crea
+       exit 1  el commit no existe (hay un secreto)
+       exit 2  Verify falló (config, Git, disco)
+
+git push
+    →  hook pre-push
+    →  verify hook-run
+    →  Git manda por stdin las refs que salen
+    →  Verify pide el diff de ese rango (solo líneas +)
+    →  exit 0  el push sigue
+       exit 1  el push se cancela
+       exit 2  Verify falló
+```
+
+El pre-commit mira el índice. Si alguien borra `.gitignore` y hace
+`git add .`, el `.env` entra al stage y Verify lo corta antes de crear
+el commit. Un `.env` *ya tracked* que se modifica también se corta.
+
+---
+
 ## Códigos de salida
 
 | Código | Significado |
@@ -183,12 +156,11 @@ Scripts y CI deben tratar 1 y 2 como fallo.
 ```bash
 verify init
 verify install
-verify update               # rebuild + replant (from the Verify clone)
+verify update               # en el repo protegido: solo replanta hooks
 verify uninstall
 verify scan                          # unpushed + working tree
-verify scan src/config.rs .env
+verify scan app.py .env
 git diff origin/main..HEAD | verify scan --diff
-git diff origin/main..HEAD | verify  # si stdin parece diff, es scan
 verify rules
 verify -v
 verify --help
@@ -219,10 +191,6 @@ Reglas incluidas, sin red:
   (no `.env.example`, `.sample`, `.template`, `.test`)
 - Tokens de alta entropía desconocidos (solo si ninguna regla pegó ya
   en esa línea)
-
-El pre-commit mira el índice. Si alguien borra `.gitignore` y hace
-`git add .`, el `.env` entra al stage y Verify lo corta antes de crear
-el commit.
 
 ---
 
@@ -282,6 +250,61 @@ Plantilla completa: `verify.toml.example` en este repo, o `verify init`.
 - `max_file_bytes` vale para el archivo entero, no para una línea.
 - Color ANSI solo si stderr es una terminal.
 - No rota credenciales. No limpia un remote. No sustituye un scanner de CI.
+- `--no-verify` es de Git. El pre-push es la segunda red, no un candado
+  de servidor.
+
+---
+
+## [Para los Rustaceans]
+
+Esto es un `[[bin]]`. Git ejecuta un exe, no una crate.
+
+MSRV **1.75**. El lockfile manda.
+
+```bash
+git clone https://github.com/TheBrake/verify.git
+cd verify
+cargo install --path . --locked
+verify -v
+```
+
+Eso deja `verify` en `PATH`. No instala hooks. Los hooks salen de
+`verify install` **dentro del repo que proteges**.
+
+Después de un `git pull` en *este* clone:
+
+```bash
+cd /ruta/al/clone/verify
+verify update
+```
+
+`update` aquí corre `cargo install --path . --locked --force` y replanta
+hooks si el cwd es un repo Git. No hace `git pull`. En cualquier otro
+directorio solo reescribe los scripts contra el binario que ya está
+en `PATH`.
+
+Tests (unitarios + freeze + contrato + portable + integración Git):
+
+```bash
+cargo test --locked
+```
+
+Artefacto Linux estático, en una máquina de develop:
+
+```bash
+sudo apt-get install -y musl-tools
+rustup target add x86_64-unknown-linux-musl
+sh scripts/package-linux-musl.sh
+file dist/verify-x86_64-unknown-linux-musl
+```
+
+CI (`.github/ci.yml`): `cargo test --locked` en cada PR; tag `v*` arma
+`verify-x86_64-unknown-linux-musl` + `verify-aarch64-apple-darwin` y
+deja un draft de GitHub Release. Ese Release *es* el canal de V1.
+Homebrew, Scoop, PyPI y `cargo publish` de una lib no entran.
+
+El crate se llama `sverify` para no chocar nombres; el binario se llama
+`verify`.
 
 ---
 
