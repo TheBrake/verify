@@ -18,6 +18,7 @@ El producto se llama **Verify** y el comando es... `verify`.
 
 ```bash
 base=https://github.com/TheBrake/verify/releases/latest/download
+
 curl -sSL -o verify-x86_64-unknown-linux-musl \
   "$base/verify-x86_64-unknown-linux-musl"
 
