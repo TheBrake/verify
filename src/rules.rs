@@ -4,8 +4,6 @@ use std::collections::HashSet;
 
 pub use crate::config::Severity;
 
-/// Static description of a built-in detector. `builtin_specs()` is the single
-/// source consumed by `compile_all` and `print_catalog`.
 #[derive(Debug, Clone, Copy)]
 pub struct RuleSpec {
     pub id: &'static str,
@@ -14,7 +12,6 @@ pub struct RuleSpec {
     pub pattern: &'static str,
     pub keywords: &'static [&'static str],
     pub secret_group: Option<usize>,
-    /// Every built-in can be replaced from verify.toml by reusing `id`.
     pub overridable: bool,
 }
 
@@ -103,7 +100,6 @@ fn compile_regex(pat: &str, id: &str) -> Result<regex::Regex, String> {
         .map_err(|e| format!("built-in rule '{id}' has invalid regex: {e}"))
 }
 
-/// Every match of `rule` on `line`. Path-scoped rules need `path`.
 pub fn match_line(rule: &CompiledRule, line: &str, path: &str) -> Vec<String> {
     let Kind::Regex {
         regex,
@@ -177,7 +173,11 @@ pub fn print_catalog() {
     println!("Built-in rules  (id in verify.toml [[rules]] replaces the built-in)");
     println!();
     for spec in builtin_specs() {
-        let flag = if spec.overridable { "overridable" } else { "locked" };
+        let flag = if spec.overridable {
+            "overridable"
+        } else {
+            "locked"
+        };
         println!(
             "  {:<22} {:>8}  [{}]  {}",
             spec.id,
@@ -187,11 +187,6 @@ pub fn print_catalog() {
         );
     }
 }
-
-// ---------------------------------------------------------------------------
-// Detector table. Add coverage here, not as new functions.
-// secret_group extracts the credential, never "key=value" or the full URL.
-// ---------------------------------------------------------------------------
 
 const BUILTIN_SPECS: &[RuleSpec] = &[
     RuleSpec {
@@ -226,7 +221,15 @@ const BUILTIN_SPECS: &[RuleSpec] = &[
         description: "GitHub PAT / App / fine-grained token",
         severity: Severity::Critical,
         pattern: r"\b((?:ghp|gho|ghu|ghs|ghr|ghn)_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{40,})\b",
-        keywords: &["ghp_", "gho_", "ghu_", "ghs_", "ghr_", "ghn_", "github_pat_"],
+        keywords: &[
+            "ghp_",
+            "gho_",
+            "ghu_",
+            "ghs_",
+            "ghr_",
+            "ghn_",
+            "github_pat_",
+        ],
         secret_group: Some(1),
         overridable: true,
     },
@@ -244,7 +247,9 @@ const BUILTIN_SPECS: &[RuleSpec] = &[
         description: "Slack bot / user / app / export token",
         severity: Severity::Critical,
         pattern: r"\b(xox[bparsec]-[A-Za-z0-9\-]{10,80})\b",
-        keywords: &["xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-", "xoxe-", "xoxc-"],
+        keywords: &[
+            "xoxb-", "xoxp-", "xoxa-", "xoxr-", "xoxs-", "xoxe-", "xoxc-",
+        ],
         secret_group: Some(1),
         overridable: true,
     },
@@ -412,7 +417,12 @@ mod tests {
             "override must not leave two jwt rules"
         );
         assert!(match_line(jwt, "OVERRIDE_JWT_TOKEN", "").len() == 1);
-        assert!(match_line(jwt, "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbb", "").is_empty());
+        assert!(match_line(
+            jwt,
+            "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.aaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbb",
+            ""
+        )
+        .is_empty());
     }
 
     #[test]
@@ -431,7 +441,10 @@ mod tests {
     #[test]
     fn aws_akia_and_asia() {
         assert_eq!(
-            hits("aws-access-key", r#"const K: &str = "AKIAIOSFODNN7EXAMPLE";"#),
+            hits(
+                "aws-access-key",
+                r#"const K: &str = "AKIAIOSFODNN7EXAMPLE";"#
+            ),
             vec!["AKIAIOSFODNN7EXAMPLE"]
         );
         assert_eq!(
@@ -478,7 +491,10 @@ mod tests {
         let rk = format!("rk_live_{}", "d".repeat(24));
         assert_eq!(hits("stripe-key", &sk), vec![sk.clone()]);
         assert_eq!(hits("stripe-key", &rk), vec![rk]);
-        assert!(hits("openai-key", &sk).is_empty(), "stripe must not trip openai");
+        assert!(
+            hits("openai-key", &sk).is_empty(),
+            "stripe must not trip openai"
+        );
     }
 
     #[test]
@@ -543,10 +559,7 @@ mod tests {
         let gh = match_line(rule(&rules, "github-token"), line, "");
         assert_eq!(aws, vec!["AKIAIOSFODNN7EXAMPLE"]);
         assert_eq!(gh, vec!["ghp_abcdefghijklmnopqrstuvwxyz0123456789"]);
-        let doubled = format!(
-            "AKIAIOSFODNN7EXAMPLE AKIA{}{}",
-            "J", "OSFODNN7EXAMPLE"
-        );
+        let doubled = format!("AKIAIOSFODNN7EXAMPLE AKIA{}{}", "J", "OSFODNN7EXAMPLE");
         let two = match_line(rule(&rules, "aws-access-key"), &doubled, "");
         assert_eq!(two.len(), 2, "{two:?}");
     }
