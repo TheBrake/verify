@@ -16,16 +16,18 @@ El producto se llama **Verify** y el comando es... `verify`.
 
 ## Tener el binario
 
-Linux x86_64 (fichero estático). Sustituye `TAG` por la etiqueta del
-[Release](https://github.com/TheBrake/verify/releases):
-
 ```bash
+base=https://github.com/TheBrake/verify/releases/latest/download
 curl -sSL -o verify-x86_64-unknown-linux-musl \
-  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl"
+  "$base/verify-x86_64-unknown-linux-musl"
+
 curl -sSL -o verify-x86_64-unknown-linux-musl.sha256 \
-  "https://github.com/TheBrake/verify/releases/download/TAG/verify-x86_64-unknown-linux-musl.sha256"
+  "$base/verify-x86_64-unknown-linux-musl.sha256"
+
 sha256sum -c verify-x86_64-unknown-linux-musl.sha256
+
 install -m 755 verify-x86_64-unknown-linux-musl ~/.local/bin/verify
+
 verify -v
 ```
 
