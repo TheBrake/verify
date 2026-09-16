@@ -1,6 +1,6 @@
 [package]
 name = "sverify"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 rust-version = "1.75"
 description = "Ultra-fast local Git pre-commit and pre-push hook that blocks leaked secrets."
@@ -14,10 +14,10 @@ name = "verify"
 path = "src/main.rs"
 
 [dependencies]
-globset = "=0.4.14"          # 0.4.20+ needs edition2024
-regex = "~1.10.6"            # 1.10.x patches only
+globset = "=0.4.14"          
+regex = "~1.10.6"            
 serde = { version = "~1.0.197", features = ["derive"] }
-toml = "~0.8.12"             # 0.8.x; lockfile freezes the exact rev
+toml = "~0.8.12"             
 indexmap = "~2.2.6"
 
 [profile.release]
