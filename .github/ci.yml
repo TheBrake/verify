@@ -122,9 +122,7 @@ jobs:
             ```
 
             macOS: `verify-aarch64-apple-darwin`.
-
-            Windows no entra en V1: los hooks son scripts Unix.
-
+            
             Este Release *es* la distribución de V1.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -72,7 +72,9 @@ fn verify(repo: &Path, args: &[&str]) -> Output {
 }
 
 fn head_exists(repo: &Path) -> bool {
-    git(repo, &["rev-parse", "--verify", "HEAD"]).status.success()
+    git(repo, &["rev-parse", "--verify", "HEAD"])
+        .status
+        .success()
 }
 
 #[test]
@@ -99,8 +101,6 @@ fn commit_run_blocks_modified_env() {
     fs::write(repo.join("README"), "ok\n").unwrap();
     git_ok(&repo, &["add", "--", "README"]);
     git_ok(&repo, &["commit", "-m", "seed"]);
-    // No hooks yet, so the first .env can be committed. Fase 0 cares
-    // about the *modified* index entry afterwards.
     fs::write(repo.join(".env"), "FOO=1\n").unwrap();
     git_ok(&repo, &["add", "--", ".env"]);
     git_ok(&repo, &["commit", "-m", "plant env"]);
@@ -142,10 +142,7 @@ fn install_writes_both_managed_hooks_and_git_commit_does_not_create() {
     };
     let pre_commit = fs::read_to_string(hooks_dir.join("pre-commit")).unwrap();
     let pre_push = fs::read_to_string(hooks_dir.join("pre-push")).unwrap();
-    assert!(
-        pre_commit.contains("# Managed by Verify"),
-        "{pre_commit}"
-    );
+    assert!(pre_commit.contains("# Managed by Verify"), "{pre_commit}");
     assert!(pre_commit.contains("commit-run"), "{pre_commit}");
     assert!(pre_push.contains("# Managed by Verify"), "{pre_push}");
     assert!(pre_push.contains("hook-run"), "{pre_push}");
@@ -156,7 +153,8 @@ fn install_writes_both_managed_hooks_and_git_commit_does_not_create() {
     let commit = git(&repo, &["commit", "-m", "should not exist"]);
     let code = commit.status.code().unwrap_or(255);
     assert_eq!(
-        code, 1,
+        code,
+        1,
         "git commit must fail with 1\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&commit.stdout),
         String::from_utf8_lossy(&commit.stderr)
@@ -179,7 +177,6 @@ fn env_example_is_not_an_env_file_finding_on_commit_run() {
         !err.contains("env-file"),
         ".env.example must not emit env-file:\n{err}"
     );
-    // Content is harmless; commit-run should allow (exit 0).
     assert_eq!(out.status.code().unwrap_or(255), 0, "{err}");
     let _ = fs::remove_dir_all(&repo);
 }

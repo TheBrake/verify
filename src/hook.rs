@@ -6,8 +6,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// First comment line of a Verify-managed hook. Ownership is this line, not a
-/// substring anywhere in the file.
 pub const HOOK_MARKER_LINE: &str = "# Managed by Verify";
 
 pub fn init_config(force: bool) -> Result<(), String> {
@@ -34,8 +32,6 @@ pub fn init_config(force: bool) -> Result<(), String> {
     Ok(())
 }
 
-/// Hooks Verify owns. pre-commit stops the object from being created;
-/// pre-push stops a `--no-verify` commit (or an older leak) from leaving.
 const MANAGED_HOOKS: &[(&str, &str)] = &[("pre-commit", "commit-run"), ("pre-push", "hook-run")];
 
 pub fn install(force: bool) -> Result<(), String> {
@@ -43,10 +39,6 @@ pub fn install(force: bool) -> Result<(), String> {
     install_exe(&exe, force)
 }
 
-/// Rebuild the PATH binary when cwd is the Verify source tree, then replant
-/// hooks so Git does not keep exec'ing yesterday's executable.
-///
-/// Does not `git pull`. Fetching source is the operator's call.
 pub fn update() -> Result<(), String> {
     let exe = match find_verify_source() {
         Some(src) => {
@@ -177,8 +169,6 @@ fn install_one(name: &str, cmd: &str, exe: &Path, force: bool) -> Result<(), Str
     Ok(())
 }
 
-/// One hook block printed by `verify install`. Stable enough to grep in tests
-/// and for a teammate to confirm which command Git will exec.
 pub fn format_install_line(name: &str, cmd: &str, hook: &Path, exe: &Path) -> String {
     let quoted = sh_single_quote(&exe.display().to_string());
     let when = match name {

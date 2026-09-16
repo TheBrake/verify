@@ -1,4 +1,3 @@
-/// A single added line extracted from a unified diff.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AddedLine {
     pub path: String,
@@ -7,11 +6,6 @@ pub struct AddedLine {
     pub is_new_file: bool,
 }
 
-/// Parse unified diff text and keep only added (`+`) lines.
-/// Context and deletions are ignored — they are not leaving the machine.
-///
-/// Returns `Err` if a `+` content line was seen without a resolvable path
-/// (a truncated or unknown diff would otherwise look like a clean scan).
 pub fn parse_unified_diff(raw: &str) -> Result<Vec<AddedLine>, String> {
     let mut out = Vec::new();
     let mut path = String::new();
@@ -93,7 +87,9 @@ pub fn parse_unified_diff(raw: &str) -> Result<Vec<AddedLine>, String> {
     }
 
     if plus_without_path && out.is_empty() {
-        return Err("unified diff has added lines but no file path (truncated or unknown format)".into());
+        return Err(
+            "unified diff has added lines but no file path (truncated or unknown format)".into(),
+        );
     }
     if plus_without_path {
         return Err("unified diff has added lines without a resolvable path".into());
@@ -101,9 +97,6 @@ pub fn parse_unified_diff(raw: &str) -> Result<Vec<AddedLine>, String> {
     Ok(out)
 }
 
-/// `+++` is a file header only when `+++` is followed by whitespace
-/// (`+++ b/foo`, `+++ /dev/null`, `+++ "b/my file"`).
-/// `+++i;` is an added line whose payload is `++i;`.
 fn is_plus_file_header(line: &str) -> bool {
     let Some(rest) = line.strip_prefix("+++") else {
         return false;
@@ -130,7 +123,6 @@ fn is_line_continuation(text: &str) -> bool {
     if !text.ends_with('\\') {
         return false;
     }
-    // raw `\\` is an escaped backslash, not a continuation
     !text.ends_with("\\\\")
 }
 

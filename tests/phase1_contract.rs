@@ -1,6 +1,3 @@
-//! Fase 1 — contrato de producto (identidad + UX de install).
-//! No añade detectores. El núcleo sigue congelado en phase0_freeze.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};

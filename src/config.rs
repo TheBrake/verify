@@ -6,9 +6,7 @@ use std::fmt;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// Hard cap so a pathological verify.toml cannot stall the hook at load time.
 pub const MAX_CONFIG_BYTES: usize = 256 * 1024;
-/// Cap compiled regex programs (bytes) so a single pattern cannot explode memory.
 pub const MAX_REGEX_SIZE: usize = 1024 * 1024;
 
 const ENTROPY_MIN: f64 = 0.0;
@@ -22,9 +20,7 @@ pub struct Config {
     pub entropy_enabled: bool,
     pub entropy_min_length: usize,
     pub entropy_threshold: f64,
-    /// Effective exclude patterns after default merge / replace.
     pub exclude: Vec<String>,
-    /// Compiled once. The engine must use this, not a recursive globber.
     pub exclude_set: GlobSet,
     pub replace_excludes: bool,
     pub block_env_files: bool,
@@ -105,7 +101,6 @@ pub enum AllowCondition {
 
 impl Default for AllowCondition {
     fn default() -> Self {
-        // Preserve previous allow semantics: every set field must match.
         Self::And
     }
 }
@@ -144,10 +139,6 @@ impl Allow {
             && self.fingerprint.is_none()
     }
 
-    /// Evaluate this allow entry against a finding.
-    ///
-    /// `And` (default): every constraint that was declared must match.
-    /// `Or`: any declared constraint is enough.
     pub fn matches(
         &self,
         rule_id: &str,
@@ -275,10 +266,6 @@ impl From<ConfigError> for String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Raw TOML shape (serde). Unknown keys are rejected.
-// ---------------------------------------------------------------------------
-
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawFile {
@@ -330,7 +317,6 @@ impl Default for RawVerify {
 struct RawPaths {
     #[serde(default)]
     exclude: Vec<String>,
-    /// When true, `exclude` replaces `default_excludes()` instead of extending it.
     #[serde(default)]
     replace_excludes: bool,
 }
@@ -359,7 +345,6 @@ struct RawRule {
 struct RawAllow {
     #[serde(default)]
     rule: Option<String>,
-    /// Single-path form kept so existing starter snippets still parse.
     #[serde(default)]
     path: Option<String>,
     #[serde(default)]
@@ -404,10 +389,6 @@ fn default_entropy_min_length() -> usize {
 fn default_entropy_threshold() -> f64 {
     4.5
 }
-
-// ---------------------------------------------------------------------------
-// Load / parse
-// ---------------------------------------------------------------------------
 
 pub fn load(explicit: Option<&Path>, repo: &Path) -> Result<Config, ConfigError> {
     let chosen = match explicit {
@@ -475,8 +456,6 @@ fn ensure_inside_repo(path: &Path, repo: &Path) -> Result<(), ConfigError> {
     Ok(())
 }
 
-/// Public wrapper kept for tests and `verify init` consumers.
-/// The real reader is `toml::from_str` — this is not a hand-rolled parser.
 pub fn parse_toml(text: &str) -> Result<Config, ConfigError> {
     let path = Path::new("<memory>");
     compile_raw(parse_raw(text, path)?, path, None)

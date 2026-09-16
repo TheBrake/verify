@@ -18,7 +18,6 @@ dest="dist/verify-${target}"
 cp "$src" "$dest"
 chmod 755 "$dest"
 
-# sha256sum en GNU; shasum en macOS.
 if command -v sha256sum >/dev/null 2>&1; then
   (cd dist && sha256sum "verify-${target}" > "verify-${target}.sha256")
 else

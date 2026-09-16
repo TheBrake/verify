@@ -4,7 +4,6 @@ use crate::rules::{self, CompiledRule, Severity};
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
-/// Stop walking the rest of the diff once this many blocking findings exist.
 const MAX_BLOCKING_FINDINGS: usize = 64;
 
 pub struct Engine {
@@ -64,8 +63,6 @@ impl Engine {
 
             let allow = line_allow(&line.text);
 
-            // New *or* modified: an env file in the diff is leaving Git.
-            // Fingerprint is per path, so many + lines collapse to one finding.
             if self.cfg.block_env_files && is_env_file(&line.path) {
                 if !allow.skips("env-file") {
                     let f = self.make_finding(
@@ -201,8 +198,6 @@ fn oversized_paths(lines: &[AddedLine], max_file_bytes: usize) -> HashSet<String
         .collect()
 }
 
-/// Read paths as if they were newly added files.
-/// I/O errors surface. Files larger than `max_file_bytes` are omitted (no findings).
 pub fn read_files_as_added(
     paths: &[PathBuf],
     max_file_bytes: usize,
@@ -223,9 +218,7 @@ pub fn read_files_as_added(
                 path: display.clone(),
                 line_no: i + 1,
                 text: line.to_string(),
-                // File scan treats the whole file as leaving the machine.
-                // Env-file policy no longer depends on is_new_file (new and
-                // modified env paths are both blocked when block_env_files).
+
                 is_new_file: env,
             });
         }
@@ -263,8 +256,6 @@ impl LineAllow {
     }
 }
 
-/// Only a real trailing comment can silence the line.
-/// `verify:allow` / `verify:ignore` / `verify-ignore`; optional `:rule_id`.
 fn line_allow(line: &str) -> LineAllow {
     let Some(body) = trailing_comment(line) else {
         return LineAllow::None;
@@ -349,7 +340,6 @@ fn looks_like_placeholder(s: &str) -> bool {
     MARKERS.iter().any(|m| l.contains(m))
 }
 
-/// Exact documentation / fixture secrets. Not a substring filter.
 fn is_doc_secret(secret: &str) -> bool {
     const DOCS: &[&str] = &[
         "AKIAIOSFODNN7EXAMPLE",
@@ -368,8 +358,6 @@ pub fn normalize_secret(secret: &str) -> String {
         .to_string()
 }
 
-/// 128-bit FNV-1a of rule_id || 0 || normalized secret. Path is not mixed in:
-/// an Allow.fingerprint silences that secret everywhere.
 pub fn fingerprint(rule_id: &str, secret: &str) -> String {
     let secret = normalize_secret(secret);
     let mut h0: u64 = 0xcbf29ce484222325;

@@ -116,7 +116,6 @@ pub fn added_lines_unpushed() -> Result<Vec<AddedLine>, String> {
 }
 
 pub fn added_lines_vs_head() -> Result<Vec<AddedLine>, String> {
-    // Revisions stay *before* `--`. After `--` Git treats tokens as pathspecs.
     let raw = git_diff_text(&{
         let mut args: Vec<&str> = DIFF_FLAGS.to_vec();
         args.extend(["HEAD", "--"]);
@@ -125,8 +124,6 @@ pub fn added_lines_vs_head() -> Result<Vec<AddedLine>, String> {
     diff::parse_unified_diff(&raw)
 }
 
-/// Added lines in the index (`git diff --cached`). Pre-commit scans this:
-/// `git add .` after deleting `.gitignore` shows up here, new and modified.
 pub fn added_lines_staged() -> Result<Vec<AddedLine>, String> {
     let raw = git_diff_text(&{
         let mut args: Vec<&str> = DIFF_FLAGS.to_vec();
@@ -137,8 +134,6 @@ pub fn added_lines_staged() -> Result<Vec<AddedLine>, String> {
     diff::parse_unified_diff(&raw)
 }
 
-/// Candidates for merge-base when the remote side is a new branch.
-/// Anchored to the push remote first. `@{upstream}` of HEAD is last, not first.
 pub fn merge_base_candidates(remote: Option<&str>) -> Vec<String> {
     let mut cands = Vec::new();
     if let Some(r) = remote {
@@ -199,13 +194,11 @@ fn diff_range(from: &str, to: &str) -> Result<Vec<AddedLine>, String> {
     diff::parse_unified_diff(&raw)
 }
 
-/// Trimmed UTF-8 for refs / SHAs / single-line answers.
 pub fn git_stdout(args: &[&str]) -> Result<String, String> {
     let raw = git_output(args)?;
     Ok(String::from_utf8_lossy(&raw).trim().to_string())
 }
 
-/// Untrimmed patch text. Valid UTF-8 is kept as-is; invalid lines are lossy.
 fn git_diff_text(args: &[&str]) -> Result<String, String> {
     let raw = git_output(args)?;
     Ok(bytes_to_diff(&raw))
