@@ -1,3 +1,4 @@
+use crate::assign_pat;
 use crate::config::{CustomRule, MAX_REGEX_SIZE};
 use regex::RegexBuilder;
 use std::collections::HashSet;
@@ -211,7 +212,7 @@ const BUILTIN_SPECS: &[RuleSpec] = &[
         id: "aws-secret-access-key",
         description: "AWS secret access key assignment",
         severity: Severity::Critical,
-        pattern: r#"(?i)(?:^|[^A-Za-z0-9])aws_secret_access_key\s*[=:]\s*['"]?([A-Za-z0-9/+=]{40})"#,
+        pattern: assign_pat!(r"aws_secret_access_key", r"([A-Za-z0-9/+=]{40})"),
         keywords: &["aws_secret_access_key"],
         secret_group: Some(1),
         overridable: true,
@@ -329,16 +330,22 @@ const BUILTIN_SPECS: &[RuleSpec] = &[
         id: "generic-db-url",
         description: "DATABASE_URL / connection string assignment",
         severity: Severity::High,
-        pattern: r#"(?i)(?:^|[^A-Za-z0-9])(?:database_url|db_url|connection_string|conn_str)\s*[=:]\s*['"]?([^'"\s]{8,})"#,
+        pattern: assign_pat!(
+            r"(?:database_url|db_url|connection_string|conn_str)",
+            r#"([^'"\s]{8,})"#
+        ),
         keywords: &["database_url", "db_url", "connection_string", "conn_str"],
         secret_group: Some(1),
         overridable: true,
     },
     RuleSpec {
         id: "generic-api-key",
-        description: "Generic API key / secret / token assignment",
+        description: "Generic API key / secret / token assignment (incl. JSON/JS/TS quoted keys)",
         severity: Severity::High,
-        pattern: r#"(?i)(?:^|[^A-Za-z0-9])(?:api[_-]?key|api_secret|access_token|auth_token|secret_key|client_secret)\s*[=:]\s*['"]?([A-Za-z0-9/_\-+=.]{12,})"#,
+        pattern: assign_pat!(
+            r"(?:api[_-]?key|api_secret|access_token|auth_token|secret_key|client_secret)",
+            r"([A-Za-z0-9/_\-+=.]{12,})"
+        ),
         keywords: &[
             "api_key",
             "api-key",
@@ -354,9 +361,12 @@ const BUILTIN_SPECS: &[RuleSpec] = &[
     },
     RuleSpec {
         id: "password-assign",
-        description: "Hard-coded password assignment",
+        description: "Hard-coded password assignment (incl. JSON/JS/TS quoted keys)",
         severity: Severity::High,
-        pattern: r#"(?i)(?:^|[^A-Za-z0-9])(?:password|passwd|pwd|db_password|db_pass)\s*[=:]\s*['"]?([^\s'"]{8,})"#,
+        pattern: assign_pat!(
+            r"(?:password|passwd|pwd|db_password|db_pass)",
+            r#"([^\s'"]{8,})"#
+        ),
         keywords: &["password", "passwd", "pwd", "db_password", "db_pass"],
         secret_group: Some(1),
         overridable: true,
@@ -545,10 +555,64 @@ mod tests {
     }
 
     #[test]
+    fn password_quoted_key_json_js_ts() {
+        assert_eq!(
+            hits("password-assign", r#"{ "password": "supersecret12" }"#),
+            vec!["supersecret12"]
+        );
+        assert_eq!(
+            hits("password-assign", r#"{'password': 'supersecret12'}"#),
+            vec!["supersecret12"]
+        );
+        assert_eq!(
+            hits("password-assign", r#"{"password":"supersecret12"}"#),
+            vec!["supersecret12"]
+        );
+        assert_eq!(
+            hits(
+                "password-assign",
+                r#"const creds = { password: "supersecret12" };"#
+            ),
+            vec!["supersecret12"]
+        );
+        assert_eq!(
+            hits("password-assign", r#""password" : "supersecret12""#),
+            vec!["supersecret12"]
+        );
+        assert!(hits("password-assign", r#""passwordless": "truevalue""#).is_empty());
+    }
+
+    #[test]
     fn generic_api_key_drops_private_key_and_extracts_value() {
         assert!(hits("generic-api-key", r#"private_key = "cert/path/key.pem""#).is_empty());
         let h = hits("generic-api-key", r#"api_key = "sk_test_abcdefghijk""#);
         assert_eq!(h, vec!["sk_test_abcdefghijk"]);
+    }
+
+    #[test]
+    fn generic_api_key_quoted_key_json_js_ts() {
+        assert_eq!(
+            hits("generic-api-key", r#"{ "api_key": "sk_test_abcdefghijk" }"#),
+            vec!["sk_test_abcdefghijk"]
+        );
+        assert_eq!(
+            hits(
+                "generic-api-key",
+                r#"export const cfg = { 'api-key': 'sk_test_abcdefghijk' };"#
+            ),
+            vec!["sk_test_abcdefghijk"]
+        );
+        assert_eq!(
+            hits("generic-api-key", r#"{"api_key":"sk_test_abcdefghijk"}"#),
+            vec!["sk_test_abcdefghijk"]
+        );
+        assert_eq!(
+            hits(
+                "generic-api-key",
+                r#"const apiKey = "sk_test_abcdefghijk";"#
+            ),
+            vec!["sk_test_abcdefghijk"]
+        );
     }
 
     #[test]

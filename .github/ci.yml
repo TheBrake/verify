@@ -108,20 +108,30 @@ jobs:
             dist/verify-aarch64-apple-darwin
             dist/verify-aarch64-apple-darwin.sha256
           body: |
-            Binario portable de Verify. No hace falta Rust ni Cargo para usarlo.
 
-            Linux (x86_64, estático / musl):
+          ## Límites conocidos
 
+            `git commit --no-verify` y `git push --no-verify` saltan el hook (es de Git).
+            Lo que ya está en un remote no lo borra este binario: rota esas credenciales.
+            
             ```bash
-            # sustituye TAG por esta etiqueta, p. ej. v1.0.0
-            curl -sSL -o verify "https://github.com/TheBrake/verify/releases/download/${{ github.ref_name }}/verify-x86_64-unknown-linux-musl"
+            base=https://github.com/TheBrake/verify/releases/download/${{ github.ref_name }}
+            curl -sSL -o verify-x86_64-unknown-linux-musl \ "$base/verify-x86_64-unknown-linux-musl"
+            curl -sSL -o verify-x86_64-unknown-linux-musl.sha256 \ "$base/verify-x86_64-unknown-linux-musl.sha256"
             sha256sum -c verify-x86_64-unknown-linux-musl.sha256
-            install -m 755 verify ~/.local/bin/verify
-            cd /ruta/al/repo
+            install -m 755 verify-x86_64-unknown-linux-musl ~/.local/bin/verify
+            cd a tu repositorio
             verify install
+            verify -v
             ```
 
             macOS: `verify-aarch64-apple-darwin`.
+
+            ```bash
+            echo 'PASSWORD=rotated-secret-99' >> .env
+            git add .env
+            git commit -m x
+            ```
             
             Este Release *es* la distribución de V1.
         env:

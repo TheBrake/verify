@@ -5,6 +5,7 @@ mod git;
 mod hook;
 mod report;
 mod rules;
+mod assign;
 
 use crate::config::{Config, FailOn};
 use crate::diff::AddedLine;
